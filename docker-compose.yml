@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: kunkor-db
+    environment:
+      POSTGRES_USER: kunkor
+      POSTGRES_PASSWORD: kunkor_dev_password
+      POSTGRES_DB: kunkor_dev
+    ports:
+      - "${POSTGRES_PORT:-5435}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./services/api/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kunkor -d kunkor_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    container_name: kunkor-api
+    environment:
+      DATABASE_URL: postgresql://kunkor:kunkor_dev_password@db:5432/kunkor_dev
+      PORT: "8000"
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: kunkor-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      INTERNAL_API_URL: http://api:8000
+      PORT: "3000"
+    ports:
+      - "${WEB_PORT:-3002}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  queue:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    container_name: kunkor-queue
+    command: ["python", "-m", "app.workers.placeholder_worker"]
+    environment:
+      DATABASE_URL: postgresql://kunkor:kunkor_dev_password@db:5432/kunkor_dev
+      ENVIRONMENT: development
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:

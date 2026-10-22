@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  api-checks:
+    name: API (Lint, Typecheck, Test, Authz)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install API dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/api/requirements-dev.txt
+
+      - name: Lint API (Ruff)
+        run: |
+          cd services/api && ruff check .
+
+      - name: Typecheck API (Mypy)
+        run: |
+          cd services/api && mypy app
+
+      - name: Run API Tests (Pytest)
+        run: |
+          cd services/api && pytest
+
+      - name: Check Module Boundary Imports
+        run: |
+          make import-check
+
+      - name: Verify Authz Policy Matrix
+        run: |
+          make authz-matrix
+
+  web-checks:
+    name: Web (Lint, Typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Web dependencies
+        run: |
+          cd apps/web && npm ci || npm install
+
+      - name: Typecheck Web
+        run: |
+          cd apps/web && npm run typecheck
+
+  secret-scan:
+    name: Secret & Dependency Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for committed secrets / patterns
+        run: |
+          ! grep -rn "PRIVATE KEY" --exclude-dir={.git,node_modules} .
+          ! grep -rn "kunkor_prod_secret" --exclude-dir={.git,node_modules} .
