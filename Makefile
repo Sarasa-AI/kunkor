@@ -32,13 +32,13 @@ import-check:
 	PYTHONPATH=$(ROOT_DIR)/services/api $(PYTHON) $(ROOT_DIR)/services/api/scripts/check_imports.py
 
 migrate:
-	$(PYTHON) $(ROOT_DIR)/services/api/scripts/migrate.py
+	PYTHONPATH=$(ROOT_DIR)/services/api:$(ROOT_DIR)/services/api/scripts $(PYTHON) $(ROOT_DIR)/services/api/scripts/migrate.py
 
 migrate-check:
-	$(PYTHON) $(ROOT_DIR)/services/api/scripts/migrate_check.py
+	PYTHONPATH=$(ROOT_DIR)/services/api:$(ROOT_DIR)/services/api/scripts $(PYTHON) $(ROOT_DIR)/services/api/scripts/migrate_check.py
 
 seed-dev:
-	$(PYTHON) $(ROOT_DIR)/services/api/scripts/seed_dev.py
+	PYTHONPATH=$(ROOT_DIR)/services/api $(PYTHON) $(ROOT_DIR)/services/api/scripts/seed_dev.py
 
-check: lint typecheck test authz-matrix import-check
+check: lint typecheck test authz-matrix import-check migrate-check
 	@echo "All verification checks passed successfully."

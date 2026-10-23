@@ -1,0 +1,56 @@
+import os
+
+import psycopg
+
+from scripts.migrate import apply_migrations, rollback_migrations
+
+TEST_DB_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql://kunkor:kunkor_dev_password@localhost:5435/kunkor_test",
+)
+
+
+def test_migrations_forward_and_backward():
+    # 1. Rollback
+    rollback_migrations(TEST_DB_URL, steps=1)
+
+    with psycopg.connect(TEST_DB_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name IN (
+                    'audit_events', 'outbox_events', 'idempotency_keys',
+                    'feature_flags', 'entitlements'
+                  );
+                """
+            )
+            tables_after_down = cur.fetchall()
+            assert len(tables_after_down) == 0
+
+    # 2. Forward
+    applied = apply_migrations(TEST_DB_URL)
+    assert applied >= 1
+
+    with psycopg.connect(TEST_DB_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name IN (
+                    'audit_events', 'outbox_events', 'idempotency_keys',
+                    'feature_flags', 'entitlements'
+                  )
+                ORDER BY table_name;
+                """
+            )
+            tables = [r[0] for r in cur.fetchall()]
+            assert "audit_events" in tables
+            assert "outbox_events" in tables
+            assert "idempotency_keys" in tables
+            assert "feature_flags" in tables
+            assert "entitlements" in tables

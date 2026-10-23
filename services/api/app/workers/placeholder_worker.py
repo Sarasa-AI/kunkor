@@ -1,17 +1,13 @@
 import logging
-import time
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+from app.workers.outbox_worker import run_worker
+
 logger = logging.getLogger("worker")
 
 
 def run() -> None:
-    logger.info("Kunkor background queue worker initialized (idle loop).")
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        logger.info("Worker stopped.")
+    logger.info("Kunkor background worker delegating to outbox worker loop.")
+    run_worker(poll_interval=5.0)
 
 
 if __name__ == "__main__":
