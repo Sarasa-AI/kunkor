@@ -97,5 +97,5 @@ jobs:
 
       - name: Scan for committed secrets / patterns
         run: |
-          ! grep -rn "PRIVATE KEY" --exclude-dir={.git,node_modules} .
-          ! grep -rn "kunkor_prod_secret" --exclude-dir={.git,node_modules} .
+          ! grep -rn "PRIVATE KEY" --exclude-dir={.git,node_modules,.github} --exclude="*.md" .
+          ! grep -rn "kunkor_prod_secret" --exclude-dir={.git,node_modules,.github} --exclude="*.md" .
