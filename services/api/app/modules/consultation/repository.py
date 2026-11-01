@@ -5,6 +5,7 @@ idempotency deduplication, and outbox event enqueueing.
 """
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -390,3 +391,35 @@ class ConsultationRepository:
             if isinstance(session.get("slots"), str):
                 session["slots"] = json.loads(session["slots"])
             return session
+
+    @staticmethod
+    def is_feature_enabled(conn: psycopg.Connection[Any], flag_name: str) -> bool:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT is_enabled FROM feature_flags WHERE name = %s;", (flag_name,))
+            row = cur.fetchone()
+            return bool(row["is_enabled"]) if row else False
+
+    @staticmethod
+    def check_student_entitlement(
+        conn: psycopg.Connection[Any],
+        student_id: UUID,
+        feature_key: str,
+    ) -> bool:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT is_granted, valid_to
+                FROM entitlements
+                WHERE student_id = %s AND feature_key = %s
+                ORDER BY created_at DESC
+                LIMIT 1;
+                """,
+                (student_id, feature_key),
+            )
+            row = cur.fetchone()
+            if not row or not row["is_granted"]:
+                return False
+            valid_to = row["valid_to"]
+            if valid_to and valid_to < datetime.now(timezone.utc):
+                return False
+            return True

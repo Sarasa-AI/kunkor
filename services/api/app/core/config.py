@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_WEBHOOK_SECRET: str = ""
 
+    # Admin & Operations configuration (Phase 5)
+    ADMIN_API_KEY: str = "kunkor_admin_secret_key"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

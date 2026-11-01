@@ -310,6 +310,18 @@ class ConsultationService:
             first_name=from_user.get("first_name"),
         )
 
+        # Entitlement Gating Check (FR-S1 / Phase 5)
+        if self.repo.is_feature_enabled(conn, "enforce_subscription_entitlements"):
+            if not self.repo.check_student_entitlement(conn, student_id, "ai_consultant"):
+                return {
+                    "status": "subscription_required",
+                    "student_id": str(student_id),
+                    "response_text": (
+                        "🔒 دسترسی به مشاور هوشمند نیازمند اشتراک فعال است.\n"
+                        "لطفاً جهت فعال‌سازی حساب کاربری خود با پشتیبانی تماس بگیرید."
+                    ),
+                }
+
         # 3. Check for progress reporting command
         if text.lower().startswith("/progress") or text in ("گزارش", "پیشرفت"):
             active_plan = self.repo.get_active_study_plan(conn, student_id)

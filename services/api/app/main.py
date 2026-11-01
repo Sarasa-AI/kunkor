@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.modules.consultation.router import router as consultation_router
+from app.modules.operations.router import router as operations_router
 
 app = FastAPI(
     title="Kunkor Educational Platform API",
@@ -13,6 +14,7 @@ app = FastAPI(
 )
 
 app.include_router(consultation_router)
+app.include_router(operations_router)
 
 # SEC-01: Explicit origin whitelist; wildcard prohibited with credentials.
 origins = settings.CORS_ALLOWED_ORIGINS
