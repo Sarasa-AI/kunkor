@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.config import settings
+
 app = FastAPI(
     title="Kunkor Educational Platform API",
     version="0.1.0",
@@ -9,12 +11,14 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+# SEC-01: Explicit origin whitelist; wildcard prohibited with credentials.
+origins = settings.CORS_ALLOWED_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=origins,
+    allow_credentials=bool(origins),
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
 )
 
 

@@ -20,6 +20,44 @@ PUBLIC_WHITELIST = {
 }
 
 
+AUTHZ_DEPENDENCY_NAMES = {
+    "require_auth",
+    "require_permission",
+    "require_student_access",
+    "verify_auth",
+    "check_authz",
+    "AuthzGuard",
+}
+
+
+def is_authz_dependency(dep: object) -> bool:
+    call = getattr(dep, "call", dep)
+    if getattr(call, "__authz_enforcing__", False):
+        return True
+    name = getattr(call, "__name__", "") or getattr(call.__class__, "__name__", "")
+    return name in AUTHZ_DEPENDENCY_NAMES
+
+
+def has_valid_authz(route: object) -> bool:
+    endpoint = getattr(route, "endpoint", None)
+    has_marker = getattr(endpoint, "__authz_required__", False) or bool(
+        getattr(endpoint, "__authz_policy__", None)
+    )
+    if has_marker:
+        return True
+
+    route_deps = getattr(route, "dependencies", []) or []
+    if any(is_authz_dependency(d) for d in route_deps):
+        return True
+
+    dependant = getattr(route, "dependant", None)
+    if dependant and hasattr(dependant, "dependencies"):
+        if any(is_authz_dependency(d) for d in dependant.dependencies):
+            return True
+
+    return False
+
+
 def check_authz() -> int:
     unauthorized_routes = []
     total_routes = 0
@@ -34,12 +72,7 @@ def check_authz() -> int:
         if path in PUBLIC_WHITELIST:
             continue
 
-        # Check if route endpoint has authz requirement marker
-        endpoint = getattr(route, "endpoint", None)
-        has_authz = getattr(endpoint, "__authz_required__", False)
-        dependencies = getattr(route, "dependencies", [])
-
-        if not has_authz and not dependencies:
+        if not has_valid_authz(route):
             unauthorized_routes.append((path, methods))
 
     print(f"Authz Matrix Check: Evaluated {total_routes} routes.")

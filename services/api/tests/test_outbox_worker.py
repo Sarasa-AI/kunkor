@@ -35,3 +35,34 @@ def test_outbox_worker_processes_events():
             row = cur.fetchone()
             assert row is not None
             assert row[0] is not None
+
+
+def test_outbox_worker_dead_letters_after_max_retries():
+    with psycopg.connect(TEST_DB_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO outbox_events (
+                    event_type, aggregate_type, aggregate_id, payload, retry_count
+                )
+                VALUES (%s, %s, %s, %s, 5)
+                RETURNING id;
+                """,
+                ("poison.pill", "test", "p-999", '{"invalid": true}'),
+            )
+            poison_id = cur.fetchone()[0]
+        conn.commit()
+
+    # Process events; event with retry_count >= MAX_RETRIES must not be processed
+    process_pending_outbox_events(limit=10, test=True)
+
+    with psycopg.connect(TEST_DB_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT processed_at, retry_count FROM outbox_events WHERE id = %s;",
+                (poison_id,),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] is None
+            assert row[1] == 5

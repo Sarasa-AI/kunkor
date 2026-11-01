@@ -20,20 +20,24 @@ def publish_to_queue(event: dict) -> None:
     )
 
 
+MAX_RETRIES = 5
+
+
 def process_pending_outbox_events(limit: int = 50, test: bool = False) -> int:
     with get_db_connection(test=test) as conn:
         with conn.transaction():
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, student_id, event_type, aggregate_type, aggregate_id, payload
+                    SELECT id, student_id, event_type, aggregate_type, aggregate_id,
+                           payload, retry_count
                     FROM outbox_events
-                    WHERE processed_at IS NULL
+                    WHERE processed_at IS NULL AND retry_count < %s
                     ORDER BY occurred_at ASC
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED;
                     """,
-                    (limit,),
+                    (MAX_RETRIES, limit),
                 )
                 rows = cur.fetchall()
                 if not rows:
@@ -48,33 +52,58 @@ def process_pending_outbox_events(limit: int = 50, test: bool = False) -> int:
                         except Exception:
                             pass
 
-                    publish_to_queue(event_data)
-
-                    cur.execute(
-                        """
-                        UPDATE outbox_events
-                        SET processed_at = NOW()
-                        WHERE id = %s;
-                        """,
-                        (row["id"],),
-                    )
-                    processed_count += 1
+                    try:
+                        with conn.transaction():
+                            publish_to_queue(event_data)
+                            cur.execute(
+                                """
+                                UPDATE outbox_events
+                                SET processed_at = NOW()
+                                WHERE id = %s;
+                                """,
+                                (row["id"],),
+                            )
+                            processed_count += 1
+                    except Exception as exc:
+                        logger.error("Failed to publish event %s: %s", row["id"], exc)
+                        new_retries = row["retry_count"] + 1
+                        if new_retries >= MAX_RETRIES:
+                            logger.critical(
+                                "Event %s reached max retries (%d); dead-lettered.",
+                                row["id"],
+                                MAX_RETRIES,
+                            )
+                        with conn.transaction():
+                            cur.execute(
+                                """
+                                UPDATE outbox_events
+                                SET retry_count = retry_count + 1
+                                WHERE id = %s;
+                                """,
+                                (row["id"],),
+                            )
 
                 return processed_count
 
 
 def run_worker(poll_interval: float = 2.0, once: bool = False) -> None:
     logger.info("Outbox worker started (poll_interval=%.1fs, once=%s)", poll_interval, once)
-    try:
-        while True:
+    while True:
+        try:
             count = process_pending_outbox_events()
             if count > 0:
                 logger.info("Processed %d outbox event(s).", count)
             if once:
                 break
             time.sleep(poll_interval)
-    except KeyboardInterrupt:
-        logger.info("Outbox worker stopping.")
+        except KeyboardInterrupt:
+            logger.info("Outbox worker stopping.")
+            break
+        except Exception as exc:
+            logger.error("Worker error during polling cycle: %s", exc)
+            if once:
+                raise
+            time.sleep(poll_interval)
 
 
 if __name__ == "__main__":
