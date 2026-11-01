@@ -38,9 +38,8 @@ def check_module_boundaries() -> int:
                         if other_mod != mod:
                             banned_models = f"app.modules.{other_mod}.models"
                             banned_repo = f"app.modules.{other_mod}.repo"
-                            if (
-                                node.module.startswith(banned_models)
-                                or node.module.startswith(banned_repo)
+                            if node.module.startswith(banned_models) or node.module.startswith(
+                                banned_repo
                             ):
                                 violations.append(
                                     f"Illegal direct internal import in {py_file}: {node.module}"

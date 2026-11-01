@@ -34,13 +34,9 @@ def sanitize_intake_for_ai(intake: IntakeSlots) -> dict[str, Any]:
     Guarantees no student identity, user ID, or contact information is leaked.
     """
     # Sanitize weak_subjects strings if any free text is entered
-    sanitized_weak_subjects = [
-        mask_pii_text(str(subject)) for subject in intake.weak_subjects
-    ]
+    sanitized_weak_subjects = [mask_pii_text(str(subject)) for subject in intake.weak_subjects]
 
-    sanitized_target_exam = (
-        mask_pii_text(str(intake.target_exam)) if intake.target_exam else None
-    )
+    sanitized_target_exam = mask_pii_text(str(intake.target_exam)) if intake.target_exam else None
 
     return {
         "stage_code": intake.stage_code,

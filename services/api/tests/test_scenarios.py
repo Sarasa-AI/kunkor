@@ -41,6 +41,7 @@ def mock_catalog():
 # 1. Primary Low (SCEN-PL-S01..S03, F01..F03)
 # ==========================================
 
+
 def test_scen_pl_s01_valid_registration_and_short_audio_plan(mock_catalog):
     intake = IntakeSlots(
         stage_code="primary_low",
@@ -119,6 +120,7 @@ def test_scen_pl_f03_reject_unlicensed_draft_resource(mock_catalog):
 # ===========================================
 # 2. Primary High (SCEN-PH-S01..S03, F01..F03)
 # ===========================================
+
 
 def test_scen_ph_s01_routine_plan_creation(mock_catalog):
     intake = IntakeSlots(
@@ -213,6 +215,7 @@ def test_scen_ph_f03_append_only_mutation_prevention():
 # ===============================================
 # 3. Lower Secondary (SCEN-LS-S01..S03, F01..F03)
 # ===============================================
+
 
 def test_scen_ls_s01_multi_subject_pacing(mock_catalog):
     intake = IntakeSlots(
@@ -318,6 +321,7 @@ def test_scen_ls_f03_revision_conflict():
 # 4. Upper Secondary (SCEN-US-S01..S03, F01..F03)
 # ===============================================
 
+
 def test_scen_us_s01_experimental_track_plan(mock_catalog):
     intake = IntakeSlots(
         stage_code="upper_secondary",
@@ -404,6 +408,7 @@ def test_scen_us_f03_expired_license_resource(mock_catalog):
 # ==========================================
 # 5. Konkur (SCEN-KO-S01..S03, F01..F03)
 # ==========================================
+
 
 def test_scen_ko_s01_marathon_plan(mock_catalog):
     intake = IntakeSlots(

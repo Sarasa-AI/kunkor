@@ -1,4 +1,5 @@
 """Application schemas package."""
+
 from app.schemas.planning import (
     STAGE_CAPACITY_LIMITS,
     STAGE_GRADE_MAP,

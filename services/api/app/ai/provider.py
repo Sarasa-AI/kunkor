@@ -31,6 +31,7 @@ telemetry_logger = logging.getLogger("kunkor.telemetry.ai")
 @dataclass
 class ProviderBudget:
     """Budget guard tracking USD spend."""
+
     budget_limit_usd: float = 10.0
     current_spend_usd: float = 0.0
 
@@ -65,10 +66,12 @@ class DeterministicRuleFallbackPlanner:
         cls,
         intake: IntakeSlots,
         available_resources: list[dict[str, Any]],
+        completed_unit_ids: Optional[set[str]] = None,
     ) -> dict[str, Any]:
         # Filter resources for stage and Published status
         matching = [
-            r for r in available_resources
+            r
+            for r in available_resources
             if r.get("stage_code") == intake.stage_code
             and r.get("status") == "Published"
             and r.get("license_active", True)
@@ -81,17 +84,24 @@ class DeterministicRuleFallbackPlanner:
             intake.daily_study_capacity_minutes,
             STAGE_CAPACITY_LIMITS.get(intake.stage_code, 60),
         )
+        scheduled_so_far: set[str] = set(completed_unit_ids or ())
 
         for res in matching:
             duration = res.get("duration_minutes", 20)
+            prereqs = res.get("prerequisites", [])
+            if not all(p in scheduled_so_far for p in prereqs):
+                continue
             if duration <= remaining_budget:
-                allocated_items.append({
-                    "item_id": f"item-{res['resource_id']}",
-                    "resource_version_id": res["resource_id"],
-                    "stage_code": intake.stage_code,
-                    "duration_minutes": duration,
-                    "prerequisites": res.get("prerequisites", []),
-                })
+                allocated_items.append(
+                    {
+                        "item_id": f"item-{res['resource_id']}",
+                        "resource_version_id": res["resource_id"],
+                        "stage_code": intake.stage_code,
+                        "duration_minutes": duration,
+                        "prerequisites": prereqs,
+                    }
+                )
+                scheduled_so_far.add(res["resource_id"])
                 remaining_budget -= duration
             if remaining_budget <= 0:
                 break
@@ -124,16 +134,10 @@ class NineRouterProvider(AiProvider):
         self._api_key = api_key or settings.NINEROUTER_API_KEY or "test-key"
         self.model = model or settings.NINEROUTER_MODEL
         timeout_sec = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else settings.NINEROUTER_TIMEOUT_SECONDS
+            timeout_seconds if timeout_seconds is not None else settings.NINEROUTER_TIMEOUT_SECONDS
         )
         self.timeout_seconds = timeout_sec
-        retries = (
-            max_retries
-            if max_retries is not None
-            else settings.NINEROUTER_MAX_RETRIES
-        )
+        retries = max_retries if max_retries is not None else settings.NINEROUTER_MAX_RETRIES
         self.max_retries = retries
         self.budget = budget or ProviderBudget()
         self._client = client
@@ -264,7 +268,9 @@ class NineRouterProvider(AiProvider):
                         delay = 0.5 * (2 ** (attempts - 1))
                     logger.warning(
                         "9router rate limited (HTTP 429), attempt %s/%s. Backing off %ss.",
-                        attempts, self.max_retries + 1, delay
+                        attempts,
+                        self.max_retries + 1,
+                        delay,
                     )
                     if attempts <= self.max_retries:
                         await asyncio.sleep(min(delay, 2.0))
@@ -276,7 +282,10 @@ class NineRouterProvider(AiProvider):
                     delay = 0.5 * (2 ** (attempts - 1))
                     logger.warning(
                         "9router transient error (HTTP %s), attempt %s/%s. Backing off %ss.",
-                        response.status_code, attempts, self.max_retries + 1, delay
+                        response.status_code,
+                        attempts,
+                        self.max_retries + 1,
+                        delay,
                     )
                     if attempts <= self.max_retries:
                         await asyncio.sleep(min(delay, 2.0))
@@ -291,7 +300,9 @@ class NineRouterProvider(AiProvider):
                 duration_ms = (time.monotonic() - start_time) * 1000.0
                 logger.warning(
                     "9router request failed (%s) on attempt %s/%s.",
-                    type(exc).__name__, attempts, self.max_retries + 1
+                    type(exc).__name__,
+                    attempts,
+                    self.max_retries + 1,
                 )
                 last_error_code = 408 if isinstance(exc, asyncio.TimeoutError) else 503
                 if attempts <= self.max_retries:
@@ -305,6 +316,4 @@ class NineRouterProvider(AiProvider):
 
         # Fallback path if all retries exhausted or non-retryable error
         self._record_telemetry(0.0, last_error_code, attempts, True)
-        return DeterministicRuleFallbackPlanner.generate_fallback_plan(
-            intake, available_resources
-        )
+        return DeterministicRuleFallbackPlanner.generate_fallback_plan(intake, available_resources)

@@ -1,4 +1,5 @@
 """Engines package for Kunkor."""
+
 from app.engines.catalog import (
     DEFAULT_RESOURCE_CATALOG,
     get_default_catalog,

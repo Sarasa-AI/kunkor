@@ -47,7 +47,8 @@ def test_migrations_forward_and_backward():
                 WHERE table_schema = 'public'
                   AND table_name IN (
                     'audit_events', 'outbox_events', 'idempotency_keys',
-                    'feature_flags', 'entitlements', 'students', 'study_plans'
+                    'feature_flags', 'entitlements', 'students', 'study_plans',
+                    'daily_progress_logs'
                   );
                 """
             )
@@ -56,7 +57,7 @@ def test_migrations_forward_and_backward():
 
     # 2. Forward
     applied = apply_migrations(TEST_DB_URL)
-    assert applied >= 2
+    assert applied >= 3
 
     with psycopg.connect(TEST_DB_URL) as conn:
         with conn.cursor() as cur:
@@ -67,7 +68,8 @@ def test_migrations_forward_and_backward():
                 WHERE table_schema = 'public'
                   AND table_name IN (
                     'audit_events', 'outbox_events', 'idempotency_keys',
-                    'feature_flags', 'entitlements', 'students', 'study_plans'
+                    'feature_flags', 'entitlements', 'students', 'study_plans',
+                    'daily_progress_logs'
                   )
                 ORDER BY table_name;
                 """
@@ -80,3 +82,4 @@ def test_migrations_forward_and_backward():
             assert "entitlements" in tables
             assert "students" in tables
             assert "study_plans" in tables
+            assert "daily_progress_logs" in tables

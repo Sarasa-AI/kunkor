@@ -15,52 +15,62 @@ from app.schemas.planning import STAGE_CAPACITY_LIMITS, IntakeSlots, StudyPlan, 
 
 class DeterministicValidationError(Exception):
     """Base class for all deterministic validation errors."""
+
     pass
 
 
 class StudyTimeLimitExceededError(DeterministicValidationError):
     """Raised when plan duration exceeds student daily capacity or stage ceiling."""
+
     pass
 
 
 class CyclicDependencyError(DeterministicValidationError):
     """Raised when a cycle is detected in prerequisite graphs."""
+
     pass
 
 
 class PrerequisiteNotSatisfiedError(DeterministicValidationError):
     """Raised when a plan item has unsatisfied prerequisites."""
+
     pass
 
 
 class ResourceLicenseError(DeterministicValidationError):
     """Raised when a resource is draft, unlicensed, or expired."""
+
     pass
 
 
 class StageMismatchError(DeterministicValidationError):
     """Raised when a resource stage does not match student stage."""
+
     pass
 
 
 class TrackSubjectMismatchError(DeterministicValidationError):
     """Raised when a subject does not belong to the selected academic track."""
+
     pass
 
 
 class RevisionConflictError(DeterministicValidationError):
     """Raised when revision numbers are non-sequential or conflicting."""
+
     pass
 
 
 class MalformedPlanError(DeterministicValidationError):
     """Raised when an AI plan proposal has invalid JSON structure or missing fields."""
+
     pass
 
 
 @dataclass(frozen=True)
 class ResourceMeta:
     """Metadata for curriculum resources in the catalog."""
+
     resource_id: str
     stage_code: str
     status: str = "Published"  # "Published", "Draft", "Archived"
@@ -71,21 +81,49 @@ class ResourceMeta:
 # Allowed specialized subjects per track in upper_secondary / konkur
 TRACK_SUBJECT_ALLOWLIST: dict[str, set[str]] = {
     "experimental": {
-        "biology", "biology_specialized", "chemistry", "physics", "mathematics",
-        "geology", "persian", "arabic", "english", "religion"
+        "biology",
+        "biology_specialized",
+        "chemistry",
+        "physics",
+        "mathematics",
+        "geology",
+        "persian",
+        "arabic",
+        "english",
+        "religion",
     },
     "mathematics": {
-        "calculus", "geometry", "discrete_math", "physics", "chemistry",
-        "persian", "arabic", "english", "religion"
+        "calculus",
+        "geometry",
+        "discrete_math",
+        "physics",
+        "chemistry",
+        "persian",
+        "arabic",
+        "english",
+        "religion",
     },
     "humanities": {
-        "literature", "arabic_specialized", "sociology", "history", "geography",
-        "philosophy_logic", "economics", "mathematics_humanities", "religion"
+        "literature",
+        "arabic_specialized",
+        "sociology",
+        "history",
+        "geography",
+        "philosophy_logic",
+        "economics",
+        "mathematics_humanities",
+        "religion",
     },
     "general": {
-        "reading_fluency", "persian", "mathematics", "science", "quran",
-        "social_studies", "english", "term_exams"
-    }
+        "reading_fluency",
+        "persian",
+        "mathematics",
+        "science",
+        "quran",
+        "social_studies",
+        "english",
+        "term_exams",
+    },
 }
 
 
@@ -113,8 +151,7 @@ class DeterministicValidator:
 
     @staticmethod
     def validate_prerequisites(
-        items: list[StudyPlanItem],
-        completed_unit_ids: Optional[set[str]] = None
+        items: list[StudyPlanItem], completed_unit_ids: Optional[set[str]] = None
     ) -> None:
         completed = set(completed_unit_ids or ())
 
@@ -198,7 +235,7 @@ class DeterministicValidator:
         plan: StudyPlan,
         intake: IntakeSlots,
         catalog: dict[str, ResourceMeta],
-        completed_unit_ids: Optional[set[str]] = None
+        completed_unit_ids: Optional[set[str]] = None,
     ) -> None:
         """
         Master deterministic validation check.

@@ -15,17 +15,10 @@ StageCode = Literal[
 ]
 
 GradeCode = Literal[
-    "G01", "G02", "G03", "G04", "G05", "G06",
-    "G07", "G08", "G09", "G10", "G11", "G12",
-    "POSTK"
+    "G01", "G02", "G03", "G04", "G05", "G06", "G07", "G08", "G09", "G10", "G11", "G12", "POSTK"
 ]
 
-TrackCode = Literal[
-    "general",
-    "mathematics",
-    "experimental",
-    "humanities"
-]
+TrackCode = Literal["general", "mathematics", "experimental", "humanities"]
 
 PlanStatus = Literal["draft", "active", "superseded"]
 
@@ -51,6 +44,7 @@ class IntakeSlots(BaseModel):
     Intake slots contract.
     Strictly typed, forbids extra untrusted properties to prevent prompt injection payload leakage.
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     stage_code: StageCode
@@ -100,6 +94,7 @@ class IntakeSlots(BaseModel):
 
 class StudyPlanItem(BaseModel):
     """Single study plan unit item."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     item_id: str
@@ -113,6 +108,7 @@ class StudyPlan(BaseModel):
     """
     Revisioned study plan conforming to ADR-0004, ADR-0005, and ADR-0008.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     plan_id: UUID = Field(default_factory=uuid4)

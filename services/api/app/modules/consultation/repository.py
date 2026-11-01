@@ -9,6 +9,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 import psycopg
+from psycopg.rows import dict_row
 
 
 class ConsultationRepository:
@@ -22,7 +23,7 @@ class ConsultationRepository:
         telegram_username: Optional[str] = None,
         first_name: Optional[str] = None,
     ) -> UUID:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 INSERT INTO students (
@@ -48,7 +49,7 @@ class ConsultationRepository:
         conn: psycopg.Connection[Any],
         student_id: UUID,
     ) -> Optional[dict[str, Any]]:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 SELECT id, student_id, current_step, slots, is_completed, created_at, updated_at
@@ -72,7 +73,7 @@ class ConsultationRepository:
         conn: psycopg.Connection[Any],
         student_id: UUID,
     ) -> dict[str, Any]:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 INSERT INTO intake_sessions (student_id, current_step, slots)
@@ -96,7 +97,7 @@ class ConsultationRepository:
         slots: dict[str, Any],
         is_completed: bool = False,
     ) -> None:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 UPDATE intake_sessions
@@ -114,7 +115,7 @@ class ConsultationRepository:
         conn: psycopg.Connection[Any],
         student_id: UUID,
     ) -> int:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 SELECT MAX(revision_no) AS max_rev
@@ -140,7 +141,7 @@ class ConsultationRepository:
         raw_proposal: dict[str, Any],
         items: list[dict[str, Any]],
     ) -> UUID:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 INSERT INTO study_plans (
@@ -190,7 +191,7 @@ class ConsultationRepository:
         aggregate_id: str,
         payload: dict[str, Any],
     ) -> UUID:
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 INSERT INTO outbox_events (
@@ -216,7 +217,7 @@ class ConsultationRepository:
         Atomically check and record idempotency key.
         Returns True if key is new, False if already seen (duplicate).
         """
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 INSERT INTO idempotency_keys (key, student_id, request_hash)
@@ -232,3 +233,160 @@ class ConsultationRepository:
             )
             row = cur.fetchone()
             return row is not None
+
+    @staticmethod
+    def get_active_study_plan(
+        conn: psycopg.Connection[Any],
+        student_id: UUID,
+    ) -> Optional[dict[str, Any]]:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, student_id, revision_no, stage_code, status,
+                       engine_version, rule_set_version, raw_proposal, created_at
+                FROM study_plans
+                WHERE student_id = %s AND status = 'active'
+                ORDER BY revision_no DESC
+                LIMIT 1;
+                """,
+                (student_id,),
+            )
+            plan_row = cur.fetchone()
+            if not plan_row:
+                return None
+            plan = dict(plan_row)
+            cur.execute(
+                """
+                SELECT id, plan_id, student_id, item_order, resource_version_id,
+                       stage_code, duration_minutes, prerequisites
+                FROM study_plan_items
+                WHERE plan_id = %s
+                ORDER BY item_order ASC;
+                """,
+                (plan["id"],),
+            )
+            items = [dict(r) for r in cur.fetchall()]
+            for it in items:
+                if isinstance(it.get("prerequisites"), str):
+                    it["prerequisites"] = json.loads(it["prerequisites"])
+            plan["items"] = items
+            return plan
+
+    @staticmethod
+    def record_daily_progress(
+        conn: psycopg.Connection[Any],
+        student_id: UUID,
+        plan_id: UUID,
+        revision_no: int,
+        completed_units: list[str],
+        missed_units: list[str],
+        duration_spent_minutes: int,
+        student_notes: Optional[str] = None,
+    ) -> UUID:
+        total_units = len(completed_units) + len(missed_units)
+        rate = (len(completed_units) / max(1, total_units)) * 100.0
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                INSERT INTO daily_progress_logs (
+                    student_id, plan_id, revision_no, completed_units,
+                    missed_units, duration_spent_minutes, completion_rate, student_notes
+                )
+                VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+                RETURNING id;
+                """,
+                (
+                    student_id,
+                    plan_id,
+                    revision_no,
+                    json.dumps(completed_units),
+                    json.dumps(missed_units),
+                    duration_spent_minutes,
+                    round(rate, 2),
+                    student_notes,
+                ),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            return UUID(str(row["id"]))
+
+    @staticmethod
+    def get_completed_unit_ids_for_student(
+        conn: psycopg.Connection[Any],
+        student_id: UUID,
+    ) -> set[str]:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT completed_units
+                FROM daily_progress_logs
+                WHERE student_id = %s;
+                """,
+                (student_id,),
+            )
+            all_completed: set[str] = set()
+            for row in cur.fetchall():
+                units = row["completed_units"]
+                if isinstance(units, str):
+                    units = json.loads(units)
+                if isinstance(units, list):
+                    all_completed.update(units)
+            return all_completed
+
+    @staticmethod
+    def supersede_plan(
+        conn: psycopg.Connection[Any],
+        plan_id: UUID,
+    ) -> None:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                UPDATE study_plans
+                SET status = 'superseded'
+                WHERE id = %s;
+                """,
+                (plan_id,),
+            )
+
+    @staticmethod
+    def get_student_historical_progress(
+        conn: psycopg.Connection[Any],
+        student_id: UUID,
+    ) -> list[dict[str, Any]]:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, student_id, plan_id, revision_no, completed_units,
+                       missed_units, duration_spent_minutes, completion_rate,
+                       student_notes, created_at
+                FROM daily_progress_logs
+                WHERE student_id = %s
+                ORDER BY created_at ASC;
+                """,
+                (student_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    @staticmethod
+    def get_latest_intake_session(
+        conn: psycopg.Connection[Any],
+        student_id: UUID,
+    ) -> Optional[dict[str, Any]]:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, student_id, current_step, slots, is_completed, created_at, updated_at
+                FROM intake_sessions
+                WHERE student_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1;
+                """,
+                (student_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            session = dict(row)
+            if isinstance(session.get("slots"), str):
+                session["slots"] = json.loads(session["slots"])
+            return session
