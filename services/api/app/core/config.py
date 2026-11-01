@@ -13,6 +13,17 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     CORS_ALLOWED_ORIGINS: list[str] = []
 
+    # AI & 9router configuration (ADR-0006, D-11)
+    NINEROUTER_API_BASE: str = "http://127.0.0.1:14747"
+    NINEROUTER_API_KEY: str = "kunkor_local_key"
+    NINEROUTER_MODEL: str = "ag/gemini-2.5-flash"
+    NINEROUTER_TIMEOUT_SECONDS: float = 15.0
+    NINEROUTER_MAX_RETRIES: int = 2
+
+    # Telegram configuration (Phase 3)
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

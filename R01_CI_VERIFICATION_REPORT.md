@@ -104,3 +104,19 @@
 - [x] Remote GitHub Actions workflow run verified green (`success`).
 
 **R01 is certified VERIFIED.**
+
+---
+
+## 7. Subsequent Verified Workflow Runs
+
+### Run 41261067230 (Stage 0 Baseline & TASK-03)
+
+- **Run ID:** `41261067230`
+- **Commit SHA:** `b22e4c02c58330bffd8fdf7972533dccc70b16dc`
+- **Branch:** `main`
+- **Workflow Run URL:** https://github.com/Sarasa-AI/kunkor/actions/runs/41261067230
+- **Workflow Conclusion:** `success`
+- **Jobs:**
+  - `API (Lint, Typecheck, Test, Authz)` (Job ID: `124714258380`): `success`
+  - `Secret & Dependency Scan` (Job ID: `124714258389`): `success`
+  - `Web (Lint, Typecheck)` (Job ID: `124714258420`): `success`
