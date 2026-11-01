@@ -10,7 +10,9 @@ import re
 import sys
 from pathlib import Path
 
-from migrate import apply_migrations, get_migration_files, rollback_migrations
+from psycopg.conninfo import conninfo_to_dict
+
+from scripts.migrate import apply_migrations, get_migration_files, rollback_migrations
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("migrate-check")
@@ -42,10 +44,47 @@ def check_file_conventions() -> list[str]:
     return errors
 
 
+ALLOWED_TEST_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "postgres",
+    "db",
+    "test-db",
+    "test-pg",
+    "kunkor-stage0-test-pg",
+}
+
+
+def require_test_database(db_url: str) -> None:
+    # ponytail: name guard only; use disposable DBs, add role isolation for shared servers.
+    if not db_url or not db_url.strip():
+        raise ValueError("Destructive checks require an explicit test database URL.")
+
+    if os.getenv("ENVIRONMENT", "development").lower() == "production":
+        raise ValueError("Destructive checks prohibited in production environment.")
+
+    try:
+        conn_dict = conninfo_to_dict(db_url)
+    except Exception as exc:
+        raise ValueError(f"Invalid connection string format: {exc}") from exc
+
+    dbname = conn_dict.get("dbname", "")
+    if not dbname or not dbname.endswith("_test"):
+        raise ValueError("Destructive checks require a disposable database named *_test.")
+
+    host = conn_dict.get("host")
+    if host and host not in ALLOWED_TEST_HOSTS and not host.endswith(".local"):
+        raise ValueError(
+            f"Destructive checks restricted to local/disposable hosts; host '{host}' rejected."
+        )
+
+
 def test_reversibility(db_url: str) -> None:
+    require_test_database(db_url)
     pairs = get_migration_files()
     total = len(pairs)
-    logger.info("Testing forward and backward execution of %d migrations on %s ...", total, db_url)
+    logger.info("Testing forward and backward execution of %d migrations ...", total)
 
     # 1. Rollback any existing to clean state
     rollback_migrations(db_url, steps=total)

@@ -1,13 +1,37 @@
 import os
 
 import psycopg
+import pytest
 
 from scripts.migrate import apply_migrations, rollback_migrations
+from scripts.migrate_check import require_test_database
 
 TEST_DB_URL = os.getenv(
     "TEST_DATABASE_URL",
     "postgresql://kunkor:kunkor_dev_password@localhost:5435/kunkor_test",
 )
+
+
+def test_destructive_checks_reject_application_database(monkeypatch):
+    for dsn in ("postgresql://localhost/kunkor_dev", "dbname=kunkor_prod", "host=localhost"):
+        with pytest.raises(ValueError, match="disposable database"):
+            require_test_database(dsn)
+
+    # Empty DSN rejected
+    with pytest.raises(ValueError, match="explicit test database URL"):
+        require_test_database("")
+
+    # Non-local / remote host rejected
+    with pytest.raises(ValueError, match="restricted to local/disposable hosts"):
+        require_test_database("postgresql://db.prod.internal:5432/kunkor_test")
+
+    # Production environment rejected
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    with pytest.raises(ValueError, match="prohibited in production"):
+        require_test_database(TEST_DB_URL)
+    monkeypatch.undo()
+
+    require_test_database(TEST_DB_URL)
 
 
 def test_migrations_forward_and_backward():

@@ -41,6 +41,7 @@ yarn-error.log*
 .pnpm-debug.log*
 .next/
 out/
+*.tsbuildinfo
 
 # Environment / Secrets
 .env

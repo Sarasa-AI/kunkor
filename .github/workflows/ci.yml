@@ -10,6 +10,23 @@ jobs:
   api-checks:
     name: API (Lint, Typecheck, Test, Authz)
     runs-on: ubuntu-latest
+    env:
+      TEST_DATABASE_URL: postgresql://kunkor:kunkor_ci_password@127.0.0.1:5435/kunkor_test
+      DATABASE_URL: postgresql://kunkor:kunkor_ci_password@127.0.0.1:5435/kunkor_test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: kunkor_test
+          POSTGRES_USER: kunkor
+          POSTGRES_PASSWORD: kunkor_ci_password
+        ports:
+          - 5435:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U kunkor -d kunkor_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
 
@@ -32,9 +49,14 @@ jobs:
         run: |
           cd services/api && mypy app
 
-      - name: Run API Tests (Pytest)
-        run: |
-          cd services/api && pytest
+      - name: Initialize test database
+        run: make migrate DATABASE_URL="$TEST_DATABASE_URL"
+
+      - name: Run API Tests (including migration round-trip)
+        run: make test
+
+      - name: Verify migration conventions and full round-trip
+        run: make migrate-check
 
       - name: Check Module Boundary Imports
         run: |
@@ -58,6 +80,10 @@ jobs:
       - name: Install Web dependencies
         run: |
           cd apps/web && npm ci || npm install
+
+      - name: Lint Web
+        run: |
+          cd apps/web && npm run lint
 
       - name: Typecheck Web
         run: |

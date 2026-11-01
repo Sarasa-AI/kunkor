@@ -22,10 +22,15 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 def get_db_url(custom_url: str | None = None) -> str:
     if custom_url:
         return custom_url
-    return os.getenv(
-        "DATABASE_URL",
-        "postgresql://kunkor:kunkor_dev_password@localhost:5435/kunkor_dev",
-    )
+    url = os.getenv("DATABASE_URL")
+    env = os.getenv("ENVIRONMENT", "development").lower()
+    if not url:
+        if env == "production":
+            raise ValueError("DATABASE_URL environment variable is required in production.")
+        return "postgresql://kunkor:kunkor_dev_password@localhost:5435/kunkor_dev"
+    if env == "production" and "kunkor_dev_password" in url:
+        raise ValueError("Insecure default credentials prohibited in production.")
+    return url
 
 
 def ensure_migrations_table(conn: psycopg.Connection) -> None:
