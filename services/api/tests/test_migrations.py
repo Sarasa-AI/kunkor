@@ -35,8 +35,8 @@ def test_destructive_checks_reject_application_database(monkeypatch):
 
 
 def test_migrations_forward_and_backward():
-    # 1. Rollback
-    rollback_migrations(TEST_DB_URL, steps=1)
+    # 1. Rollback all migrations
+    rollback_migrations(TEST_DB_URL, steps=999)
 
     with psycopg.connect(TEST_DB_URL) as conn:
         with conn.cursor() as cur:
@@ -47,7 +47,7 @@ def test_migrations_forward_and_backward():
                 WHERE table_schema = 'public'
                   AND table_name IN (
                     'audit_events', 'outbox_events', 'idempotency_keys',
-                    'feature_flags', 'entitlements'
+                    'feature_flags', 'entitlements', 'students', 'study_plans'
                   );
                 """
             )
@@ -56,7 +56,7 @@ def test_migrations_forward_and_backward():
 
     # 2. Forward
     applied = apply_migrations(TEST_DB_URL)
-    assert applied >= 1
+    assert applied >= 2
 
     with psycopg.connect(TEST_DB_URL) as conn:
         with conn.cursor() as cur:
@@ -67,7 +67,7 @@ def test_migrations_forward_and_backward():
                 WHERE table_schema = 'public'
                   AND table_name IN (
                     'audit_events', 'outbox_events', 'idempotency_keys',
-                    'feature_flags', 'entitlements'
+                    'feature_flags', 'entitlements', 'students', 'study_plans'
                   )
                 ORDER BY table_name;
                 """
@@ -78,3 +78,5 @@ def test_migrations_forward_and_backward():
             assert "idempotency_keys" in tables
             assert "feature_flags" in tables
             assert "entitlements" in tables
+            assert "students" in tables
+            assert "study_plans" in tables

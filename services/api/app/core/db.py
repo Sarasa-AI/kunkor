@@ -1,4 +1,6 @@
 import logging
+import os
+import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
@@ -12,7 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 def get_connection_string(test: bool = False) -> str:
-    return settings.TEST_DATABASE_URL if test else settings.DATABASE_URL
+    if test or "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        return (
+            settings.TEST_DATABASE_URL
+            or os.getenv("TEST_DATABASE_URL", "")
+            or "postgresql://kunkor:kunkor_dev_password@localhost:5435/kunkor_test"
+        )
+    return settings.DATABASE_URL
 
 
 @contextmanager

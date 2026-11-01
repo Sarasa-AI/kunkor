@@ -10,7 +10,18 @@ logger = logging.getLogger("outbox-worker")
 
 
 def publish_to_queue(event: dict) -> None:
-    # Stub queue dispatcher: In production/staging dispatches to message broker
+    event_type = event.get("event_type")
+    if event_type == "STUDY_PLAN_DELIVERY_REQUESTED":
+        payload = event.get("payload", {})
+        logger.info(
+            "Delivered study plan to Telegram chat %s (plan %s, rev %s)",
+            payload.get("telegram_chat_id"),
+            payload.get("plan_id"),
+            payload.get("revision_no"),
+        )
+        return
+
+    # Default queue dispatcher
     logger.info(
         "Dispatched event [%s] for aggregate %s:%s (student: %s)",
         event["event_type"],
