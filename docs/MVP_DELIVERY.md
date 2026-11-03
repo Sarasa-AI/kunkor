@@ -17,7 +17,7 @@ To ensure absolute auditability and prevent false claims of completion, each pha
 
 | Phase | Phase Name | Implementation | Synthetic Tests | External Integration | Human Acceptance | Live Pilot | Overall Gate Status |
 |---|---|---|---|---|---|---|---|
-| **1** | Baseline & Stabilization | ✅ YES | ✅ YES | N/A | N/A | N/A | `IN_PROGRESS` |
+| **1** | Baseline & Stabilization | ✅ YES | ✅ YES | N/A | N/A | N/A | `VERIFIED / CLOSED` |
 | **2** | Contracts & AI Foundation | ✅ YES | ✅ YES | ❌ UNVERIFIED | ❌ UNVERIFIED | ❌ UNVERIFIED | `READY_FOR_ACCEPTANCE` (Synthetic Only) |
 | **3** | Telegram Consultation | ✅ YES | ✅ YES | ❌ UNVERIFIED | ❌ UNVERIFIED | ❌ UNVERIFIED | `READY_FOR_ACCEPTANCE` (Synthetic Only) |
 | **4** | Progress & Revision Loop | ✅ YES | ✅ YES | N/A | ❌ UNVERIFIED | ❌ UNVERIFIED | `READY_FOR_ACCEPTANCE` (Synthetic Only) |
@@ -32,10 +32,10 @@ To ensure absolute auditability and prevent false claims of completion, each pha
 
 ### Phase 1 — Baseline Verification & Repository Stabilization
 - **Objective:** Establish a trustworthy, auditable starting baseline.
-- **Committed Baseline:** Commit `6c49c8b86efbd2fd83864e47fb30cd78439b6649` passed remote CI run `41267511951` (95 passed, all 3 workflow jobs green).
-- **Working Tree State:** Working tree contains uncommitted changes implementing Phases 2–6, retention migration 0006, operational scripts, and evaluation fixtures.
-- **Preservation Record:** Historical pre-existing prototype files preserved.
-- **Gate Decision:** `IN_PROGRESS`. Cannot be marked closed until the current dirty working tree is committed and proven green on remote CI.
+- **Committed Baseline:** Commit `4c06b116730e72bd01c5f336082db4f49f4f43c1` passed remote CI run `41564765602` (189 tests passed, all 3 workflow jobs green).
+- **Working Tree State:** Clean (`git status --short` empty). All Phases 2–6 implementation, migration 0004–0006, operational scripts, and evaluation fixtures committed.
+- **Preservation Record:** Historical pre-existing prototype files preserved in `docs/history/`.
+- **Gate Decision:** `VERIFIED / CLOSED`. Clean working tree committed and proven green on remote CI at exact SHA `4c06b116730e72bd01c5f336082db4f49f4f43c1` (run `41564765602`).
 
 ### Phase 2 — Product Contract & AI Foundation
 - **Objective:** Ensure all AI-generated plan proposals obey deterministic constraints and PII rules.
