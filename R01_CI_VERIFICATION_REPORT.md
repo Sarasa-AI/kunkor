@@ -1,11 +1,15 @@
 # R01 — Remote CI Verification Report
 
+Current verification (2026-11-01): committed HEAD `6c49c8b86efbd2fd83864e47fb30cd78439b6649` passed [run 41267511951](https://github.com/Sarasa-AI/kunkor/actions/runs/41267511951). Live read-only GitHub metadata and logs verified all three jobs: 95 tests passed, 1 warning; Ruff clean; Mypy 25 files; migrations 0001–0003 up/down/up; import/authz checks clean. This excludes current uncommitted corrective work. The sections below describe historical runs.
+
+Scope limits: secret job checks two literal patterns, excludes Markdown and `.github`, runs no dependency scanner. Authz matrix checks declared markers/dependencies, not runtime authorization. Schema round-trips do not prove backup/restore or business data preservation. No live Telegram/provider delivery was tested.
+
 ## 1. Executive Summary
 
 - **Task ID:** R01
 - **Status:** **VERIFIED**
 - **Evaluation Date:** 2026-10-31 / 2026-11-01
-- **Verified Commit SHA:** `a733c236ad6beeb3dffca1e2e2ec7c2b5ec58451`
+- **Verified Commit SHA:** `a733c23809684889554587ff479a0ac774b3b37e`
 - **Branch:** `main`
 - **GitHub Actions Run ID:** `41260318410`
 - **Workflow Run URL:** https://github.com/Sarasa-AI/kunkor/actions/runs/41260318410
@@ -51,7 +55,7 @@
 6. **Migration Conventions and Reversibility**:
    - Command: `make migrate-check`
    - Exit code: `0`
-   - Steps: Forward apply -> Backward rollback -> Re-apply forward (100% reversible, zero data corruption).
+   - Steps: Forward apply -> Backward rollback -> Re-apply forward (disposable schema rollback and recreation only; down migrations delete data).
 7. **Modular Boundary Import Check**:
    - Command: `make import-check`
    - Exit code: `0` (0 violations)
@@ -78,11 +82,11 @@
 ## 5. Failure History & Resolution
 
 1. **Run 41260182760 (Initial Push)**:
-   - Commit: `41715ab82dfb66d7adbc62ba62d3db7b678c430e`
+   - Commit: `41715ab3f0211d760bd9f11c37c25c4181b5fc0e`
    - Conclusion: `failure` (Job `Secret & Dependency Scan` failed).
    - Root Cause: In `.github/workflows/ci.yml`, the literal grep command `! grep -rn "PRIVATE KEY" --exclude-dir={.git,node_modules} .` matched the search string inside `ci.yml` itself and markdown audit records (`AUDIT_05_SECURITY_OPERATIONS.md`), producing a false-positive violation.
    - Resolution: Updated secret scanner to exclude `.github` and markdown documentation (`--exclude-dir={.git,node_modules,.github} --exclude="*.md"`).
-   - Retest Commit: `a733c236ad6beeb3dffca1e2e2ec7c2b5ec58451`
+   - Retest Commit: `a733c23809684889554587ff479a0ac774b3b37e`
    - Retest Run: `41260318410` -> **SUCCESS** across all 3 jobs.
 
 ---

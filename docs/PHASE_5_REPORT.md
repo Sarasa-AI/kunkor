@@ -1,82 +1,77 @@
-# Phase 5 — Operations, Admin & Entitlements Report
+# Phase 5 — Metadata Whitelist and Offline Evaluation Report
 
-- **Report ID:** `PHASE-05-OPERATIONS-ADMIN`
-- **Date:** 2026-10-31
-- **Status:** `COMPLETED`
+- **Report ID:** `PHASE-05-METADATA-EVAL`
+- **Date:** 2026-11-01
+- **Status:** `IN_PROGRESS` (Synthetic evaluation complete; human pedagogical review pending)
+
+The previous administrative implementation report is retained unchanged at
+[history/PHASE_5_ADMIN_REPORT.md](history/PHASE_5_ADMIN_REPORT.md). Its historical
+`COMPLETED` label concerns that earlier administrative scope, not acceptance of this Phase 5 gate.
 
 ---
 
-## 1. Phase Objective
-Deliver administrative oversight, consultation inspection, dynamic feature flag controls, subscription entitlement gating, and immutable audit logging while upholding deny-by-default authorization.
+## 1. Evidence Available
 
-## 2. Completed Tasks
-- [x] Implemented `app/modules/operations` with `OperationsRepository`, `require_admin_auth`, and FastAPI admin router.
-- [x] Enforced administrative authentication supporting `X-Admin-Api-Key` and standard `Authorization: Bearer <token>` headers.
-- [x] Verified deny-by-default authorization (`check_authz_matrix.py`: 14 routes evaluated, 100% compliant).
-- [x] Added consultation review endpoints:
-  - `GET /api/v1/admin/students` (paginated student directory with active plan summaries).
-  - `GET /api/v1/admin/students/{student_id}/plans` (complete versioned plan history, items, and metadata).
-  - `GET /api/v1/admin/students/{student_id}/progress` (chronological daily progress check-in logs).
-- [x] Added feature flag management endpoints (`GET /api/v1/admin/flags`, `POST /api/v1/admin/flags`).
-- [x] Added student entitlement endpoints (`GET /api/v1/admin/entitlements/{student_id}`, `POST /api/v1/admin/entitlements`).
-- [x] Wired dynamic subscription gating into `ConsultationService`:
-  - Flag `enforce_subscription_entitlements` controls enforcement.
-  - Checks student's `ai_consultant` entitlement validity and expiration.
-  - Blocks unauthorized students with clear Persian subscription guidance.
-- [x] Implemented audit log recording and query endpoint (`GET /api/v1/admin/audit-logs`) with student and action filters.
-- [x] Verified modular monolith boundary compliance (`check_imports.py`: 0 violations).
-- [x] Wrote comprehensive integration test suite (`test_operations_and_entitlements.py`: 5 tests).
-- [x] Verified full test suite (95 automated tests passing).
+`services/api/app/engines/catalog.py` contains 19 local synthetic metadata fixtures.
+Every record identifies its provenance as `local_synthetic_fixture`, verification
+as `UNVERIFIED`, domain approval as `PENDING`, authorization scope as
+`metadata_only_synthetic_evaluation`, `full_content_access=False`, and no
+`content_license_id`. Publisher, title, page/test counts, duration, and prerequisite
+claims have not been independently verified. No local evidence establishes
+bibliographic accuracy or permission to process/display copyrighted content.
+The legacy `license_active` field permits synthetic metadata scheduling only;
+it is not a `ContentLicense` or a content-rights decision.
 
-## 3. Files Created, Modified, or Removed
-- Created: `services/api/app/modules/operations/__init__.py`
-- Created: `services/api/app/modules/operations/auth.py`
-- Created: `services/api/app/modules/operations/repository.py`
-- Created: `services/api/app/modules/operations/router.py`
-- Created: `services/api/tests/test_operations_and_entitlements.py`
-- Created: `docs/PHASE_5_REPORT.md`
-- Modified: `services/api/app/core/config.py`
-- Modified: `services/api/app/main.py`
-- Modified: `services/api/app/modules/consultation/repository.py`
-- Modified: `services/api/app/modules/consultation/service.py`
+The catalog supports metadata-only scheduling under the D-11 distinction. It
+contains no full questions or book text. Approval of metadata does not authorize
+full-content access. Real resource approval and domain review remain pending.
 
-## 4. Technical Decisions
-- Monolithic module boundary: `operations` and `consultation` maintain isolation; communication occurs via database schemas and service contracts.
-- Deny-by-default: admin routes require explicit `require_admin_auth` dependency with `__authz_enforcing__` marker.
-- Audit trail immutability: admin configuration changes (flag updates, entitlement grants) are persisted to the append-only `audit_events` table protected by trigger `prevent_append_only_mutation()`.
-- Dynamic entitlement gating: feature flag allows instant zero-downtime activation or deactivation of monetization controls.
+---
 
-## 5. Tests Executed and Actual Results
-- Pytest: 95 passed in 2.24s (100% pass rate).
-- Ruff: clean (0 errors, 45 files formatted).
-- Mypy: clean (0 issues in 25 source files).
-- Authz Matrix: 14 routes evaluated, 100% compliant.
-- Modular Boundaries: 0 violations.
-- Web frontend: Next.js 15 lint clean, typecheck clean.
+## 2. Reproducible Offline Evaluation Breakdown
 
-## 6. Tests Not Executed and Reasons
-- Live external payment gateway integration (mocked via entitlements CRUD API; real payment provider webhook deferred to billing integration milestone).
+The versioned synthetic dataset is `services/api/tests/fixtures/offline_plans.json` (version 2).
+Nine test cases explicitly encode expected outcomes across 5 school stages and boundary conditions:
 
-## 7. Security and Reliability Findings
-- Unauthorized requests to administrative endpoints are strictly rejected (HTTP 403).
-- Administrative actions create unalterable audit trails in PostgreSQL.
-- Flag changes take effect immediately across all student requests without server restarts.
+### 2.1 Positive Generation Scenarios (7 Cases)
+- **Cases:** `primary_low` (G02), `primary_high` (G05), `lower_secondary` (G09), `upper_secondary` (G10), `konkur_experimental` (G12), `konkur_mathematics` (G12), `konkur_humanities` (G12).
+- **Expected Outcome:** `generate_plan`.
+- **Actual Outcome:** 7/7 produced valid, non-empty study plans.
+- **Verification:** All 7 plans pass authoritative `DeterministicValidator`:
+  - Total duration ≤ daily capacity.
+  - All assigned units strictly match student grade and academic track.
+  - Prerequisite DAG ordering satisfied (zero cycles).
+  - Weak-subject coverage: 1.0 (100% of reported weak subjects assigned priority resources).
+- **Positive Generation Verdict:** `PASS` (7/7).
 
-## 8. Remaining Risks
-- Web client presentation for student-facing plans and progress (addressed in Phase 6).
+### 2.2 Negative Boundary Scenarios (2 Cases)
+- **Case `missing_grade`:** Primary High student in Grade `G04`. Catalog contains `G05` only.
+  - **Expected Outcome:** `refuse_plan` (Reason: `no_matching_resources_for_grade`).
+  - **Actual Outcome:** 0 items generated. No cross-grade resources assigned.
+  - **Consultation Behavior:** Returns `status: "resources_unavailable"`, preserves student intake, informs student via Persian message.
+  - **Integrity Verified:** Zero invalid plans persisted in database; no unvalidated fallback.
+- **Case `insufficient_time`:** Konkur student with 10 minutes daily capacity. Shortest catalog unit is 60 minutes.
+  - **Expected Outcome:** `refuse_plan` (Reason: `capacity_below_minimum_resource_duration`).
+  - **Actual Outcome:** 0 items generated. Zero capacity limit violations.
+  - **Integrity Verified:** Daily capacity constraint strictly respected.
+- **Negative Boundary Verdict:** `PASS` (2/2 correctly refused, zero state corruption).
 
-## 9. Git Status and Relevant Commit SHA
-- Working tree contains verified Phase 5 implementation and tests.
+---
 
-## 10. Acceptance Criteria Results
-- Admin authentication guards active: PASS.
-- Student consultation review accessible: PASS.
-- Feature flag management operational: PASS.
-- Entitlement gating active and verified: PASS.
-- Audit events recorded and queryable: PASS.
+## 3. Automated Verification Tests
 
-## 11. Exit Gate Decision
-**Status: COMPLETED.** Proceed autonomously to Phase 6.
+`services/api/tests/test_plan_evaluation.py` automates these assertions:
+1. `test_synthetic_catalog_never_claims_content_authorization`: proves zero content authorization claims.
+2. `test_offline_positive_and_negative_evaluations_are_reproducible`: verifies 7/7 positive passes and 2/2 negative refusal handling.
 
-## 12. Next Phase Objective
-**Phase 6: Multi-channel Web Experience & UI Integration** (student web portal for plan viewing, daily check-in interface, and Persian RTL educational dashboard).
+---
+
+## 4. Remaining Gate Decisions
+
+- **Synthetic Offline Evaluation:** `PASS` (9/9 cases match expected outcomes; 100% weak-subject coverage).
+- **Resource Metadata Factual Verification:** `PENDING` (requires publisher confirmation).
+- **Pedagogical Usefulness & Educational Expert Review:** `PENDING` (requires human domain specialist evaluation).
+- **Live 9router Integration:** `UNVERIFIED` (external network calls disabled).
+- **Real Pilot:** `BLOCKED` (awaiting owner authorization).
+
+**Overall Exit Gate Decision:** `IN_PROGRESS`. Synthetic mechanics verified; domain and human review pending.
