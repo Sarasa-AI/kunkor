@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.db import get_db_connection
@@ -37,6 +37,20 @@ class GrantEntitlementRequest(BaseModel):
     feature_key: str = Field(min_length=1, max_length=100)
     is_granted: bool = True
     valid_to: Optional[datetime] = None
+
+
+@router.get("/outbox/health")
+def outbox_health() -> dict[str, Any]:
+    with get_db_connection() as conn:
+        return OperationsRepository.outbox_health(conn)
+
+
+@router.post("/outbox/{event_id}/retry")
+def retry_outbox(event_id: UUID) -> dict[str, str]:
+    with get_db_connection() as conn, conn.transaction():
+        if not OperationsRepository.retry_outbox(conn, event_id):
+            raise HTTPException(409, "Only unprocessed dead-letter events can be retried.")
+    return {"status": "pending", "delivery_semantics": "at_least_once"}
 
 
 @router.get("/students")

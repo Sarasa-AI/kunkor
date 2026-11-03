@@ -280,3 +280,54 @@ def test_validator_accepts_valid_proposal_and_creates_study_plan(konkur_intake, 
     assert len(plan.items) == 3
     assert sum(it.duration_minutes for it in plan.items) == 180
     assert plan.rule_set_version == "1.2.0"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "duration",
+        "prerequisites",
+        "item_stage",
+        "track",
+        "grade",
+        "duplicate_item",
+        "duplicate_resource",
+    ],
+)
+def test_trusted_catalog_rejects_forged_plan(mutation, konkur_intake, default_catalog):
+    from app.engines.validator import DeterministicValidationError
+
+    item = {
+        "item_id": "one",
+        "resource_version_id": "konkur_bio_g12_ch1",
+        "stage_code": "konkur",
+        "duration_minutes": 60,
+        "prerequisites": [],
+    }
+    items = [item]
+    if mutation == "duration":
+        item["duration_minutes"] = 1
+    elif mutation == "prerequisites":
+        item["resource_version_id"] = "konkur_bio_g12_ch2"
+    elif mutation == "item_stage":
+        item["stage_code"] = "primary_low"
+    elif mutation == "track":
+        item["resource_version_id"] = "konkur_hum_sociology"
+    elif mutation == "grade":
+        konkur_intake = IntakeSlots(
+            stage_code="konkur",
+            grade="POSTK",
+            track="experimental",
+            daily_study_capacity_minutes=240,
+        )
+    else:
+        other = dict(item)
+        if mutation == "duplicate_item":
+            other["resource_version_id"] = "konkur_chem_g12_ch1"
+        else:
+            other["item_id"] = "two"
+        items.append(other)
+    with pytest.raises(DeterministicValidationError):
+        DeterministicValidator.validate_and_parse_proposal(
+            {"items": items}, konkur_intake, default_catalog
+        )

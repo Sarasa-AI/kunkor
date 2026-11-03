@@ -1,3 +1,5 @@
+> Historical Stage 0 snapshot. Current HEAD 6c49c8b adds consultation/progress and admin routers, migrations 0002/0003, planning validator/provider, resource catalogue and operations. The endpoint/table lists below are not a current complete inventory. Current corrective work remains uncommitted and under verification. External AI and Telegram delivery default disabled; admin credentials must be explicitly configured. Worker log output is not proof of actual Telegram delivery.
+
 # Kunkor — Stage 0 Repository Inventory
 
 ## 1. Overview & Repository Topology

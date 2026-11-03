@@ -1,5 +1,6 @@
 """Admin and Operations authentication dependencies."""
 
+from secrets import compare_digest
 from typing import Optional
 
 from fastapi import Header, HTTPException, status
@@ -16,20 +17,24 @@ def require_admin_auth(
     Guards administrative operations against unauthorized access.
     """
     expected = settings.ADMIN_API_KEY
-    if not expected:
+    if not expected.strip() or expected == "kunkor_admin_secret_key":
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Admin API key is not configured.",
         )
 
     # 1. Check custom X-Admin-Api-Key header
-    if x_admin_api_key and x_admin_api_key == expected:
+    if x_admin_api_key and compare_digest(x_admin_api_key.encode(), expected.encode()):
         return True
 
     # 2. Check Bearer token in standard Authorization header
     if authorization:
         parts = authorization.strip().split()
-        if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1] == expected:
+        if (
+            len(parts) == 2
+            and parts[0].lower() == "bearer"
+            and compare_digest(parts[1].encode(), expected.encode())
+        ):
             return True
 
     raise HTTPException(

@@ -26,9 +26,22 @@ from app.workers.outbox_worker import process_pending_outbox_events
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def synthetic_telegram(monkeypatch):
+    from app.core.config import settings
+    from app.workers import outbox_worker
+
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "synthetic-webhook-secret")
+    monkeypatch.setattr(settings, "NINEROUTER_ENABLED", False)
+    monkeypatch.setattr(outbox_worker, "send_message", lambda chat_id, text: 12345)
+    client.headers["X-Telegram-Bot-Api-Secret-Token"] = "synthetic-webhook-secret"
+    yield
+    client.headers.pop("X-Telegram-Bot-Api-Secret-Token", None)
+
+
 def _complete_intake_for_student(chat_id: int) -> dict[str, Any]:
     """Helper to run a test student through the 5-step intake and produce Rev 1 plan."""
-    tg_user_id = chat_id + 1000
+    tg_user_id = chat_id
 
     # 1. /start
     res1 = client.post(
@@ -105,6 +118,26 @@ def _complete_intake_for_student(chat_id: int) -> dict[str, Any]:
     )
     assert res5.status_code == 200
     data = res5.json()
+    assert data["step"] == "goal"
+    for offset, text, next_step in [
+        (101, "آزمون", "days"),
+        (102, "شنبه،دوشنبه", "session"),
+        (103, "25 دقیقه", "completed"),
+    ]:
+        response = client.post(
+            "/api/v1/telegram/webhook",
+            json={
+                "update_id": chat_id * 10 + offset,
+                "message": {
+                    "chat": {"id": chat_id, "type": "private"},
+                    "from": {"id": chat_id},
+                    "text": text,
+                },
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["step"] == next_step
     assert data["status"] == "plan_generated"
     assert data["revision_no"] == 1
     return data
@@ -116,7 +149,7 @@ async def test_multi_day_progress_reporting_and_revision_flow():
     Test Day 1 intake -> Day 1 progress check-in -> Day 2 Plan Rev 2 generation.
     """
     chat_id = int(str(uuid.uuid4().int)[:9])
-    tg_user_id = chat_id + 1000
+    tg_user_id = chat_id
 
     # Day 1: Student finishes intake and gets Plan Rev 1
     plan_rev1_data = _complete_intake_for_student(chat_id)
@@ -242,7 +275,7 @@ async def test_multi_day_progress_reporting_and_revision_flow():
                 """
                 SELECT event_type, processed_at, aggregate_id
                 FROM outbox_events
-                WHERE student_id = %s
+                WHERE student_id = %s AND aggregate_type = 'study_plan'
                 ORDER BY occurred_at ASC;
                 """,
                 (student_id,),
@@ -250,7 +283,7 @@ async def test_multi_day_progress_reporting_and_revision_flow():
             outbox_rows = cur.fetchall()
             assert len(outbox_rows) == 2
             assert outbox_rows[0][0] == "STUDY_PLAN_DELIVERY_REQUESTED"
-            assert outbox_rows[1][0] == "STUDY_PLAN_REVISION_DELIVERED"
+            assert outbox_rows[1][0] == "STUDY_PLAN_REVISION_REQUESTED"
             assert outbox_rows[1][2] == rev2_plan_id
 
     # Verify Outbox Worker processes revision event without errors
@@ -321,7 +354,7 @@ async def test_persian_progress_report_parsing_and_revision():
     /progress تکمیل: bio | نرسیدم: chem | زمان: 120 دقیقه | یادداشت: عالی بود
     """
     chat_id = int(str(uuid.uuid4().int)[:9])
-    tg_user_id = chat_id + 1000
+    tg_user_id = chat_id
 
     plan_rev1_data = _complete_intake_for_student(chat_id)
     student_id = plan_rev1_data["student_id"]
@@ -363,7 +396,7 @@ async def test_progress_without_active_plan_rejected():
     Verify that reporting progress without having an active plan returns guidance to /start.
     """
     chat_id = int(str(uuid.uuid4().int)[:9])
-    tg_user_id = chat_id + 1000
+    tg_user_id = chat_id
 
     res = client.post(
         "/api/v1/telegram/webhook",
@@ -435,3 +468,242 @@ async def test_direct_service_method_and_prerequisite_unlocking():
         assert history[1]["revision_no"] == 2
         assert history[0]["completed_units"] == ["konkur_bio_g12_ch1"]
         assert history[1]["completed_units"] == ["konkur_bio_g12_ch2"]
+
+
+@pytest.mark.asyncio
+async def test_progress_rejects_unknown_duplicate_and_overlapping_units_before_history():
+    from fastapi import HTTPException
+
+    chat_id = int(str(uuid.uuid4().int)[:9])
+    generated = _complete_intake_for_student(chat_id)
+    student_id = uuid.UUID(generated["student_id"])
+    service = ConsultationService()
+    with psycopg.connect(get_connection_string(test=True)) as conn:
+        plan = service.repo.get_active_study_plan(conn, student_id)
+        unit = plan["items"][0]["resource_version_id"]
+        for completed, missed in [(["unknown-resource"], []), ([unit, unit], []), ([unit], [unit])]:
+            with pytest.raises(HTTPException) as exc:
+                await service.handle_progress_and_revision(conn, student_id, completed, missed, 30)
+            assert exc.value.status_code == 422
+        assert service.repo.get_student_historical_progress(conn, student_id) == []
+        assert service.repo.get_active_study_plan(conn, student_id)["id"] == plan["id"]
+
+
+def test_restart_keeps_one_active_intake_and_durable_prompts():
+    chat_id = int(str(uuid.uuid4().int)[:9])
+    for offset in (1, 2):
+        result = client.post(
+            "/api/v1/telegram/webhook",
+            json={
+                "update_id": chat_id * 10 + offset,
+                "message": {
+                    "chat": {"id": chat_id, "type": "private"},
+                    "from": {"id": chat_id},
+                    "text": "/start",
+                },
+            },
+        )
+        assert result.status_code == 200
+    student_id = result.json()["student_id"]
+    with psycopg.connect(get_connection_string(test=True)) as conn:
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM intake_sessions WHERE student_id = %s AND NOT is_completed",
+                (student_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM outbox_events WHERE student_id = %s "
+                "AND event_type = 'TELEGRAM_MESSAGE_REQUESTED'",
+                (student_id,),
+            ).fetchone()[0]
+            == 2
+        )
+
+
+def test_telegram_rejects_group_or_mismatched_sender():
+    chat_id = int(str(uuid.uuid4().int)[:9])
+    for chat_type, sender in [("group", chat_id), ("private", chat_id + 1)]:
+        result = client.post(
+            "/api/v1/telegram/webhook",
+            json={
+                "update_id": chat_id,
+                "message": {
+                    "chat": {"id": chat_id, "type": chat_type},
+                    "from": {"id": sender},
+                    "text": "/start",
+                },
+            },
+        )
+        assert result.json()["reason"] == "private_identity_required"
+    with psycopg.connect(get_connection_string(test=True)) as conn:
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM students WHERE telegram_chat_id = %s", (chat_id,)
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_invalid_intake_clarifies_twice_then_cancels():
+    chat_id = int(str(uuid.uuid4().int)[:9])
+    statuses = []
+    for offset, text in enumerate(["/start", "invalid", "invalid", "invalid"], 1):
+        result = client.post(
+            "/api/v1/telegram/webhook",
+            json={
+                "update_id": chat_id * 10 + offset,
+                "message": {
+                    "chat": {"id": chat_id, "type": "private"},
+                    "from": {"id": chat_id},
+                    "text": text,
+                },
+            },
+        )
+        statuses.append(result.json()["status"])
+    assert statuses == [
+        "intake_in_progress",
+        "clarification_required",
+        "clarification_required",
+        "intake_cancelled",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_proposals_repair_at_most_twice_then_validate_fallback():
+    from app.schemas.planning import IntakeSlots
+
+    class InvalidProvider:
+        calls = 0
+
+        async def propose_study_plan(self, *args, **kwargs):
+            self.calls += 1
+            return {"items": []}
+
+    provider = InvalidProvider()
+    service = ConsultationService(ai_provider=provider)
+    intake = IntakeSlots(
+        stage_code="konkur",
+        grade="G12",
+        track="experimental",
+        daily_study_capacity_minutes=180,
+        weak_subjects=["biology"],
+    )
+    from app.engines.catalog import get_resources_for_stage
+
+    plan, proposal = await service.validate_or_repair(
+        {"items": []}, intake, get_resources_for_stage("konkur"), uuid.uuid4(), 1
+    )
+    assert provider.calls == 2
+    assert plan.items
+    assert proposal["source"] == "deterministic_fallback_planner"
+
+
+@pytest.mark.asyncio
+async def test_completed_curriculum_stops_without_repeating_completed_units():
+    chat_id = int(str(uuid.uuid4().int)[:9])
+    generated = _complete_intake_for_student(chat_id)
+    student_id = uuid.UUID(generated["student_id"])
+    service = ConsultationService()
+    seen = set()
+    with psycopg.connect(get_connection_string(test=True)) as conn:
+        for _ in range(10):
+            plan = service.repo.get_active_study_plan(conn, student_id)
+            units = [item["resource_version_id"] for item in plan["items"]]
+            assert not seen.intersection(units)
+            seen.update(units)
+            result = await service.handle_progress_and_revision(
+                conn, student_id, units, [], 180, telegram_chat_id=chat_id
+            )
+            if result["status"] == "curriculum_completed":
+                break
+        else:
+            pytest.fail("Curriculum failed to finish within catalog bound")
+        assert service.repo.get_active_study_plan(conn, student_id) is None
+        assert len(service.repo.get_student_historical_progress(conn, student_id)) >= 1
+
+
+def test_structured_constraints_validate_and_split_without_inventing_study_days():
+    from pydantic import ValidationError
+
+    from app.schemas.planning import IntakeSlots, split_study_sessions
+
+    base = dict(
+        stage_code="konkur", grade="G12", track="experimental", daily_study_capacity_minutes=120
+    )
+    for invalid in [
+        dict(study_days=[]),
+        dict(study_days=[0, 0]),
+        dict(study_days=[7]),
+        dict(study_days=[True]),
+        dict(study_days=[1.0]),
+        dict(study_days=["1"]),
+        dict(max_session_minutes=0),
+        dict(max_session_minutes=121),
+        dict(goal_code="student name"),
+    ]:
+        with pytest.raises(ValidationError):
+            IntakeSlots(**base, **invalid)
+    intake = IntakeSlots(**base, study_days=[0, 5], max_session_minutes=25, goal_code="review")
+    items = [{"resource_version_id": "synthetic-unit", "duration_minutes": 60}]
+    sessions = split_study_sessions(items, intake.max_session_minutes)
+    assert [s["duration_minutes"] for s in sessions] == [25, 25, 10]
+    assert intake.study_days == [0, 5]
+    assert sum(s["duration_minutes"] for s in sessions) == 60
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        ["/start", "هفتم", "90 دقیقه", "ریاضی", "مدرسه", "شنبه", "20 دقیقه"],
+        ["/start", "دوازدهم", "تجربی", "15 دقیقه", "زیست", "آزمون", "شنبه", "10 دقیقه"],
+    ],
+)
+def test_unsupported_grade_or_small_capacity_preserves_intake_without_plan(answers):
+    chat_id = int(str(uuid.uuid4().int)[:9])
+    for offset, text in enumerate(answers, 1):
+        response = client.post(
+            "/api/v1/telegram/webhook",
+            json={
+                "update_id": chat_id * 100 + offset,
+                "message": {
+                    "chat": {"id": chat_id, "type": "private"},
+                    "from": {"id": chat_id},
+                    "text": text,
+                },
+            },
+        )
+        assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "resources_unavailable"
+    with psycopg.connect(get_connection_string(test=True)) as conn:
+        student_id = uuid.UUID(result["student_id"])
+        assert ConsultationRepository.get_active_study_plan(conn, student_id) is None
+        session = ConsultationRepository.get_latest_intake_session(conn, student_id)
+        assert session["slots"]["goal_code"] in ("school", "exam")
+        assert session["slots"]["max_session_minutes"] in (10, 20)
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM outbox_events WHERE student_id = %s "
+                "AND aggregate_type = 'study_plan'",
+                (student_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"update_id": 1, "message": []},
+        {"update_id": True, "message": {}},
+        {"update_id": 1, "message": {"chat": [], "from": {}, "text": "x"}},
+        {"update_id": 1, "message": {"chat": {}, "from": {}, "text": []}},
+    ],
+)
+def test_malformed_telegram_updates_are_ignored(update):
+    response = client.post("/api/v1/telegram/webhook", json=update)
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"

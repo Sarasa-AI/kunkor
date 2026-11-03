@@ -47,6 +47,8 @@ out/
 .env
 .env.local
 .env.*.local
+.env.pilot.local
+services/api/.env.pilot.local
 *.pem
 *.key
 

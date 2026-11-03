@@ -4,31 +4,25 @@ import logging
 import time
 
 from app.core.db import get_db_connection
+from app.workers.telegram import DeliveryDisabled, send_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("outbox-worker")
 
 
-def publish_to_queue(event: dict) -> None:
-    event_type = event.get("event_type")
-    if event_type == "STUDY_PLAN_DELIVERY_REQUESTED":
+def publish_to_queue(event: dict) -> int | None:
+    if event.get("event_type") in {
+        "TELEGRAM_MESSAGE_REQUESTED",
+        "STUDY_PLAN_DELIVERY_REQUESTED",
+        "STUDY_PLAN_REVISION_REQUESTED",
+        "STUDY_PLAN_REVISION_DELIVERED",
+    }:
         payload = event.get("payload", {})
-        logger.info(
-            "Delivered study plan to Telegram chat %s (plan %s, rev %s)",
-            payload.get("telegram_chat_id"),
-            payload.get("plan_id"),
-            payload.get("revision_no"),
-        )
-        return
-
-    # Default queue dispatcher
+        return send_message(payload.get("telegram_chat_id"), payload.get("message_text"))
     logger.info(
-        "Dispatched event [%s] for aggregate %s:%s (student: %s)",
-        event["event_type"],
-        event["aggregate_type"],
-        event["aggregate_id"],
-        event.get("student_id"),
+        "Dispatched event [%s] for aggregate %s", event["event_type"], event["aggregate_id"]
     )
+    return None
 
 
 MAX_RETRIES = 5
@@ -43,7 +37,7 @@ def process_pending_outbox_events(limit: int = 50, test: bool = False) -> int:
                     SELECT id, student_id, event_type, aggregate_type, aggregate_id,
                            payload, retry_count
                     FROM outbox_events
-                    WHERE processed_at IS NULL AND retry_count < %s
+                    WHERE processed_at IS NULL AND retry_count < %s AND next_attempt_at <= NOW()
                     ORDER BY occurred_at ASC
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED;
@@ -65,18 +59,23 @@ def process_pending_outbox_events(limit: int = 50, test: bool = False) -> int:
 
                     try:
                         with conn.transaction():
-                            publish_to_queue(event_data)
+                            message_id = publish_to_queue(event_data)
                             cur.execute(
                                 """
                                 UPDATE outbox_events
-                                SET processed_at = NOW()
+                                SET processed_at = NOW(), telegram_message_id = %s,
+                                    last_error = NULL
                                 WHERE id = %s;
                                 """,
-                                (row["id"],),
+                                (message_id, row["id"]),
                             )
                             processed_count += 1
+                    except DeliveryDisabled:
+                        continue
                     except Exception as exc:
-                        logger.error("Failed to publish event %s: %s", row["id"], exc)
+                        logger.error(
+                            "Failed to publish event %s (%s)", row["id"], type(exc).__name__
+                        )
                         new_retries = row["retry_count"] + 1
                         if new_retries >= MAX_RETRIES:
                             logger.critical(
@@ -88,10 +87,12 @@ def process_pending_outbox_events(limit: int = 50, test: bool = False) -> int:
                             cur.execute(
                                 """
                                 UPDATE outbox_events
-                                SET retry_count = retry_count + 1
+                                SET retry_count = retry_count + 1,
+                                    next_attempt_at = NOW() + (%s * INTERVAL '1 second'),
+                                    last_error = %s
                                 WHERE id = %s;
                                 """,
-                                (row["id"],),
+                                (min(300, 2**new_retries), type(exc).__name__, row["id"]),
                             )
 
                 return processed_count

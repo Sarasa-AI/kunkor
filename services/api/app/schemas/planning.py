@@ -1,7 +1,7 @@
 """Planning and Intake schemas for Kunkor Stage 0.5."""
 
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -19,6 +19,8 @@ GradeCode = Literal[
 ]
 
 TrackCode = Literal["general", "mathematics", "experimental", "humanities"]
+
+Weekday = Annotated[int, Field(strict=True, ge=0, le=6)]
 
 PlanStatus = Literal["draft", "active", "superseded"]
 
@@ -54,6 +56,18 @@ class IntakeSlots(BaseModel):
     weak_subjects: list[str] = Field(default_factory=list)
     target_exam: Optional[str] = None
     guardian_consent: Optional[bool] = None
+    goal_code: Literal["school", "exam", "review"] = "exam"
+    study_days: list[Weekday] = Field(
+        default_factory=lambda: list(range(7)), min_length=1, max_length=7
+    )
+    max_session_minutes: Optional[int] = Field(default=None, gt=0, strict=True)
+
+    @field_validator("study_days")
+    @classmethod
+    def validate_study_days(cls, days: list[int]) -> list[int]:
+        if len(set(days)) != len(days) or any(day < 0 or day > 6 for day in days):
+            raise ValueError("Study days must be unique weekdays from 0 (Monday) to 6 (Sunday).")
+        return days
 
     @field_validator("daily_study_capacity_minutes")
     @classmethod
@@ -66,6 +80,13 @@ class IntakeSlots(BaseModel):
 
     @model_validator(mode="after")
     def validate_grade_and_consent(self) -> "IntakeSlots":
+        maximum = self.max_session_minutes
+        if maximum is None:
+            object.__setattr__(
+                self, "max_session_minutes", min(60, self.daily_study_capacity_minutes)
+            )
+        elif maximum > self.daily_study_capacity_minutes:
+            raise ValueError("Session maximum cannot exceed daily capacity.")
         # Validate grade belongs to stage
         valid_grades = STAGE_GRADE_MAP.get(self.stage_code, set())
         if self.grade not in valid_grades:
@@ -81,10 +102,6 @@ class IntakeSlots(BaseModel):
             stg = self.stage_code
             raise ValueError(f"Daily capacity {cap}m exceeds {stg} ceiling ({ceiling}m)")
 
-        # ADR-0003 / D-04: Age < 15 (primary_low, primary_high) requires guardian consent
-        if self.stage_code in ("primary_low", "primary_high") and not self.guardian_consent:
-            raise ValueError(f"Guardian consent is mandatory for stage '{self.stage_code}'")
-
         # Track restriction
         if self.stage_code not in ("upper_secondary", "konkur") and self.track != "general":
             raise ValueError(f"Specialized tracks not permitted for stage '{self.stage_code}'")
@@ -97,8 +114,8 @@ class StudyPlanItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    item_id: str
-    resource_version_id: str
+    item_id: str = Field(min_length=1)
+    resource_version_id: str = Field(min_length=1)
     stage_code: StageCode
     duration_minutes: int = Field(gt=0)
     prerequisites: list[str] = Field(default_factory=list)
@@ -126,3 +143,19 @@ class StudyPlan(BaseModel):
         if v < 1:
             raise ValueError("revision_no must be >= 1")
         return v
+
+
+def split_study_sessions(items: list[dict[str, Any]], maximum: int) -> list[dict[str, Any]]:
+    """Split trusted daily units without changing their order or total duration."""
+    if maximum <= 0:
+        raise ValueError("Session maximum must be positive.")
+    sessions = []
+    for item in items:
+        remaining = item["duration_minutes"]
+        while remaining > 0:
+            duration = min(maximum, remaining)
+            sessions.append(
+                {"resource_version_id": item["resource_version_id"], "duration_minutes": duration}
+            )
+            remaining -= duration
+    return sessions

@@ -15,6 +15,51 @@ TEST_DB_URL = os.getenv(
 )
 
 
+@pytest.mark.parametrize("key", ["", "kunkor_admin_secret_key", "   "])
+def test_production_rejects_missing_or_default_admin_key(key):
+    with pytest.raises(ValueError, match="Explicit ADMIN_API_KEY"):
+        Settings(
+            _env_file=None, ENVIRONMENT="production",
+            DATABASE_URL="postgresql://user:synthetic@localhost/app", ADMIN_API_KEY=key,
+        )
+
+
+@pytest.mark.parametrize("key", ["", "kunkor_admin_secret_key"])
+def test_admin_auth_rejects_unconfigured_key(monkeypatch, key):
+    from fastapi import HTTPException
+
+    from app.modules.operations.auth import require_admin_auth
+    from app.modules.operations.auth import settings as admin_settings
+
+    monkeypatch.setattr(admin_settings, "ADMIN_API_KEY", key)
+    with pytest.raises(HTTPException) as exc:
+        require_admin_auth(x_admin_api_key=key, authorization=None)
+    assert exc.value.status_code == 500
+
+
+def test_external_integrations_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("NINEROUTER_ENABLED", raising=False)
+    monkeypatch.delenv("TELEGRAM_DELIVERY_ENABLED", raising=False)
+    cfg = Settings(_env_file=None, ENVIRONMENT="development")
+    assert not cfg.NINEROUTER_ENABLED
+    assert not cfg.TELEGRAM_DELIVERY_ENABLED
+
+
+def test_provider_credential_alias(monkeypatch):
+    monkeypatch.delenv("NINEROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("NINE_ROUTER_API_KEY", "synthetic-alias-key")
+    assert Settings(_env_file=None).NINEROUTER_API_KEY == "synthetic-alias-key"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("NINEROUTER_TIMEOUT_SECONDS", 0), ("NINEROUTER_TIMEOUT_SECONDS", 61),
+    ("NINEROUTER_MAX_RETRIES", -1), ("NINEROUTER_MAX_RETRIES", 4),
+])
+def test_provider_limits_rejected(field, value):
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, **{field: value})
+
+
 def test_sec_01_cors_allowed_origin():
     client = TestClient(app)
     response = client.get(

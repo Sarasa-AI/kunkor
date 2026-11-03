@@ -33,16 +33,16 @@ def sanitize_intake_for_ai(intake: IntakeSlots) -> dict[str, Any]:
     Extract strictly anonymous educational parameters for AI proposal prompt.
     Guarantees no student identity, user ID, or contact information is leaked.
     """
-    # Sanitize weak_subjects strings if any free text is entered
-    sanitized_weak_subjects = [mask_pii_text(str(subject)) for subject in intake.weak_subjects]
+    from app.engines.validator import TRACK_SUBJECT_ALLOWLIST
 
-    sanitized_target_exam = mask_pii_text(str(intake.target_exam)) if intake.target_exam else None
-
+    allowed = TRACK_SUBJECT_ALLOWLIST[intake.track]
     return {
         "stage_code": intake.stage_code,
         "grade": intake.grade,
         "track": intake.track,
+        "goal_code": intake.goal_code,
+        "study_days": intake.study_days,
+        "max_session_minutes": intake.max_session_minutes,
         "daily_study_capacity_minutes": intake.daily_study_capacity_minutes,
-        "weak_subjects": sanitized_weak_subjects,
-        "target_exam": sanitized_target_exam,
+        "weak_subjects": [subject for subject in intake.weak_subjects if subject in allowed],
     }

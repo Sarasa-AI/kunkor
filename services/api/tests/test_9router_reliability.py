@@ -87,6 +87,7 @@ async def test_9router_fallback_on_timeout(sample_intake, sample_catalog):
             timeout_seconds=0.05,
             max_retries=0,
             client=client,
+            usage_reserver=lambda _: True,
         )
         proposal = await provider.propose_study_plan(sample_intake, sample_catalog)
         assert proposal["source"] == "deterministic_fallback_planner"
@@ -103,6 +104,7 @@ async def test_9router_fallback_on_http_500(sample_intake, sample_catalog):
             timeout_seconds=5.0,
             max_retries=0,
             client=client,
+            usage_reserver=lambda _: True,
         )
         proposal = await provider.propose_study_plan(sample_intake, sample_catalog)
         assert proposal["source"] == "deterministic_fallback_planner"
@@ -127,6 +129,7 @@ async def test_9router_success_records_spend(sample_intake, sample_catalog):
             timeout_seconds=5.0,
             budget=budget,
             client=client,
+            usage_reserver=lambda _: True,
         )
         proposal = await provider.propose_study_plan(sample_intake, sample_catalog)
         assert proposal["source"] == "9router"
@@ -157,6 +160,7 @@ async def test_9router_handles_http_429_with_retry_and_success(sample_intake, sa
             timeout_seconds=5.0,
             max_retries=2,
             client=client,
+            usage_reserver=lambda _: True,
         )
         proposal = await provider.propose_study_plan(sample_intake, sample_catalog)
         assert proposal["source"] == "9router"
@@ -178,6 +182,7 @@ async def test_9router_handles_http_429_exhausted_falls_back(sample_intake, samp
             timeout_seconds=5.0,
             max_retries=1,
             client=client,
+            usage_reserver=lambda _: True,
         )
         proposal = await provider.propose_study_plan(sample_intake, sample_catalog)
         assert proposal["source"] == "deterministic_fallback_planner"
@@ -207,7 +212,7 @@ async def test_pii_masking_in_ai_request_payload(sample_catalog):
 
     transport = httpx.MockTransport(interceptor_handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        provider = NineRouterProvider(client=client)
+        provider = NineRouterProvider(client=client, usage_reserver=lambda _: True)
         await provider.propose_study_plan(intake, sample_catalog)
 
     assert len(captured_payloads) == 1
@@ -216,9 +221,9 @@ async def test_pii_masking_in_ai_request_payload(sample_catalog):
     assert "09123456789" not in sent_text
     assert "@ali_konkuri" not in sent_text
     assert "0012345678" not in sent_text
-    assert "[MASKED_PHONE]" in sent_text
-    assert "[MASKED_HANDLE]" in sent_text
-    assert "[MASKED_NATIONAL_ID]" in sent_text
+    context = json.loads(captured_payloads[0]["messages"][1]["content"])
+    assert context["weak_subjects"] == []
+    assert "target_exam" not in context
 
 
 def test_pii_masking_utility():
@@ -237,3 +242,89 @@ def test_pii_masking_utility():
     assert "[MASKED_EMAIL]" in masked
     assert "[MASKED_NATIONAL_ID]" in masked
     assert "[MASKED_HANDLE]" in masked
+
+
+@pytest.mark.asyncio
+async def test_total_deadline_includes_retries(sample_intake, sample_catalog):
+    calls = 0
+
+    async def handler(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = NineRouterProvider(
+            client=client, usage_reserver=lambda _: True, timeout_seconds=0.03, max_retries=3
+        )
+        started = asyncio.get_running_loop().time()
+        proposal = await provider.propose_study_plan(sample_intake, sample_catalog)
+        assert asyncio.get_running_loop().time() - started < 0.2
+        assert calls == 1
+        assert proposal["source"] == "deterministic_fallback_planner"
+
+
+@pytest.mark.asyncio
+async def test_prompt_contains_only_structured_context(sample_intake, sample_catalog):
+    captured = []
+
+    async def handler(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"items": []}'}}]})
+
+    intake = sample_intake.model_copy(
+        update={
+            "weak_subjects": ["biology", "علی رضایی t.me/private_name 0912 345 6789"],
+            "target_exam": "علی رضایی",
+        }
+    )
+    sample_catalog[0]["title"] = "untrusted private name"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await NineRouterProvider(client=client, usage_reserver=lambda _: True).propose_study_plan(
+            intake, sample_catalog, completed_unit_ids={"res_math_1"}
+        )
+    context = json.loads(captured[0]["messages"][1]["content"])
+    assert context["weak_subjects"] == ["biology"]
+    assert "target_exam" not in context
+    assert all("title" not in r for r in context["resources"])
+    assert context["completed_unit_ids"] == ["res_math_1"]
+    assert context["resources"][0]["resource_id"] == "res_math_1"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"timeout_seconds": 0},
+        {"timeout_seconds": 61},
+        {"max_retries": -1},
+        {"max_retries": 4},
+    ],
+)
+def test_provider_rejects_unbounded_options(options):
+    with pytest.raises(ValueError):
+        NineRouterProvider(**options)
+
+
+def test_fallback_filters_track_and_grade(sample_intake, sample_catalog):
+    sample_catalog[0].update(grade="G11", subject="mathematics")
+    sample_catalog[1].update(grade="G12", subject="sociology")
+    assert (
+        DeterministicRuleFallbackPlanner.generate_fallback_plan(sample_intake, sample_catalog)[
+            "items"
+        ]
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_disabled_provider_never_opens_network(monkeypatch, sample_intake, sample_catalog):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "NINEROUTER_ENABLED", False)
+
+    def unexpected_client(*args, **kwargs):
+        raise AssertionError("Network client must not be constructed")
+
+    monkeypatch.setattr(httpx, "AsyncClient", unexpected_client)
+    proposal = await NineRouterProvider().propose_study_plan(sample_intake, sample_catalog)
+    assert proposal["source"] == "deterministic_fallback_planner"

@@ -3,9 +3,17 @@
 - **Report ID:** `PHASE-01-BASELINE`
 - **Date:** 2026-10-31
 - **Evaluated Commit:** `b22e4c02c58330bffd8fdf7972533dccc70b16dc`
-- **Status:** `COMPLETED`
+- **Status:** `IN_PROGRESS` (current corrective verification)
 
 ---
+
+## Current corrective status (2026-11-01)
+
+The remaining sections record the historical b22e4c0 baseline, not current acceptance. Current committed HEAD `6c49c8b86efbd2fd83864e47fb30cd78439b6649` has verified green remote [CI run 41267511951](https://github.com/Sarasa-AI/kunkor/actions/runs/41267511951): 95 passed, 1 warning, all three jobs successful. Uncommitted fixes are not covered by that run.
+
+Corrective work disables external AI/delivery by default, removes usable default admin credentials, validates provider limits and credential aliases. Verification remains pending final local synthetic checks. No provider, Telegram, real-user pilot, deployment, live DB or recovery drill authorized/executed in this corrective pass. Destructive schema rollback proves recreation, not data preservation. Worker delivery and concurrency/recovery proof require separate verification. The static authz checker and two-pattern secret scan have limited coverage. D-11 remains required; D-04 age policy excluded.
+
+The approved roadmap is: baseline; AI/contracts/validator; Telegram consultation; progress/revisions; resources/offline evaluation; security/operations/recovery/cost; controlled real pilot; release. Historical phase numbering does not redefine it.
 
 ## 1. Phase Objective
 Establish a reliable, auditable baseline for development: verify remote CI, audit security, database, worker/outbox, and inventory.
@@ -61,7 +69,7 @@ Establish a reliable, auditable baseline for development: verify remote CI, audi
 - Existing work preserved: PASS.
 
 ## 11. Exit Gate Decision
-**Status: COMPLETED.** Proceed autonomously to Phase 2.
+**Historical decision: COMPLETED at b22e4c0. Current corrective gate: IN_PROGRESS pending final verification.**
 
 ## 12. Next Phase Objective
 **Phase 2: Product Contract and AI Infrastructure** (complete 9router client with retries/429 backoff/telemetry, finalize schemas, deterministic validator with malformed output handling, resource whitelist, PII protection tests).

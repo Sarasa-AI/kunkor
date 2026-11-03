@@ -75,14 +75,22 @@ def test_scen_pl_s03_parent_capacity_revision():
     assert plan_v2.revision_no == plan_v1.revision_no + 1
 
 
-def test_scen_pl_f01_reject_without_guardian_consent():
-    with pytest.raises(ValidationError, match="Guardian consent is mandatory"):
-        IntakeSlots(
-            stage_code="primary_low",
-            grade="G02",
-            guardian_consent=False,
-            daily_study_capacity_minutes=20,
-        )
+@pytest.mark.parametrize("consent", [None, False])
+def test_scen_pl_f01_deferred_guardian_policy_preserves_educational_checks(consent):
+    data = dict(
+        stage_code="primary_low",
+        grade="G02",
+        guardian_consent=consent,
+        daily_study_capacity_minutes=20,
+    )
+    assert IntakeSlots(**data).guardian_consent is consent
+    for invalid in (
+        {"grade": "G12"},
+        {"stage_code": "konkur"},
+        {"daily_study_capacity_minutes": 31},
+    ):
+        with pytest.raises(ValidationError):
+            IntakeSlots(**(data | invalid))
 
 
 def test_scen_pl_f02_reject_capacity_exceeding_stage_limit():

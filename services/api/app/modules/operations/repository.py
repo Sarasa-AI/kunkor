@@ -13,6 +13,38 @@ class OperationsRepository:
     """PostgreSQL data access layer for admin operations and entitlements."""
 
     @staticmethod
+    def outbox_health(conn: psycopg.Connection[Any]) -> dict[str, Any]:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("""
+                SELECT COUNT(*) FILTER (WHERE processed_at IS NULL AND retry_count < 5)
+                           AS pending,
+                       COUNT(*) FILTER (WHERE processed_at IS NULL AND retry_count >= 5)
+                           AS dead_letter,
+                       COALESCE(EXTRACT(EPOCH FROM NOW() - MIN(occurred_at)
+                           FILTER (WHERE processed_at IS NULL)), 0)::float8
+                           AS oldest_pending_seconds
+                FROM outbox_events;
+            """)
+            row = cur.fetchone()
+            assert row is not None
+            return dict(row)
+
+    @staticmethod
+    def retry_outbox(conn: psycopg.Connection[Any], event_id: UUID) -> bool:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE outbox_events SET retry_count = 0, next_attempt_at = NOW(), last_error = NULL
+                WHERE id = %s AND processed_at IS NULL AND retry_count >= 5 RETURNING id;
+            """, (event_id,))
+            if cur.fetchone() is None:
+                return False
+        OperationsRepository.record_audit_event(
+            conn, action="outbox.retry", resource_type="outbox_event",
+            resource_id=str(event_id), metadata={"delivery_semantics": "at_least_once"},
+        )
+        return True
+
+    @staticmethod
     def get_students(
         conn: psycopg.Connection[Any],
         limit: int = 50,

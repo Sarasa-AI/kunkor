@@ -10,7 +10,10 @@ from typing import Any, Optional
 from uuid import UUID
 
 import psycopg
+from fastapi import HTTPException
 from psycopg.rows import dict_row
+
+from app.schemas.planning import split_study_sessions
 
 
 class ConsultationRepository:
@@ -74,7 +77,13 @@ class ConsultationRepository:
         conn: psycopg.Connection[Any],
         student_id: UUID,
     ) -> dict[str, Any]:
+        ConsultationRepository.lock_student(conn, student_id)
         with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "UPDATE intake_sessions SET is_completed = TRUE "
+                "WHERE student_id = %s AND NOT is_completed",
+                (student_id,),
+            )
             cur.execute(
                 """
                 INSERT INTO intake_sessions (student_id, current_step, slots)
@@ -141,15 +150,22 @@ class ConsultationRepository:
         rule_set_version: str,
         raw_proposal: dict[str, Any],
         items: list[dict[str, Any]],
+        intake_slots: Optional[dict[str, Any]] = None,
     ) -> UUID:
+        ConsultationRepository.lock_student(conn, student_id)
         with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "UPDATE study_plans SET status = 'superseded' "
+                "WHERE student_id = %s AND status = 'active'",
+                (student_id,),
+            )
             cur.execute(
                 """
                 INSERT INTO study_plans (
                     id, student_id, revision_no, stage_code, status,
-                    engine_version, rule_set_version, raw_proposal
+                    engine_version, rule_set_version, raw_proposal, intake_slots
                 )
-                VALUES (%s, %s, %s, %s, 'active', %s, %s, %s::jsonb)
+                VALUES (%s, %s, %s, %s, 'active', %s, %s, %s::jsonb, %s::jsonb)
                 RETURNING id;
                 """,
                 (
@@ -160,6 +176,7 @@ class ConsultationRepository:
                     engine_version,
                     rule_set_version,
                     json.dumps(raw_proposal),
+                    json.dumps(intake_slots or {}),
                 ),
             )
             for idx, item in enumerate(items):
@@ -244,7 +261,7 @@ class ConsultationRepository:
             cur.execute(
                 """
                 SELECT id, student_id, revision_no, stage_code, status,
-                       engine_version, rule_set_version, raw_proposal, created_at
+                       engine_version, rule_set_version, raw_proposal, intake_slots, created_at
                 FROM study_plans
                 WHERE student_id = %s AND status = 'active'
                 ORDER BY revision_no DESC
@@ -271,6 +288,14 @@ class ConsultationRepository:
                 if isinstance(it.get("prerequisites"), str):
                     it["prerequisites"] = json.loads(it["prerequisites"])
             plan["items"] = items
+            slots = plan.get("intake_slots") or {}
+            plan["goal_code"] = slots.get("goal_code", "exam")
+            plan["study_days"] = slots.get("study_days", list(range(7)))
+            maximum = slots.get("max_session_minutes") or min(
+                60, slots.get("daily_study_capacity_minutes", 60)
+            )
+            plan["max_session_minutes"] = maximum
+            plan["sessions"] = split_study_sessions(items, maximum)
             return plan
 
     @staticmethod
@@ -423,3 +448,59 @@ class ConsultationRepository:
             if valid_to and valid_to < datetime.now(timezone.utc):
                 return False
             return True
+
+    @staticmethod
+    def lock_student(conn: psycopg.Connection[Any], student_id: UUID) -> None:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM students WHERE id = %s FOR UPDATE", (student_id,))
+
+    @staticmethod
+    def begin_request(
+        conn: psycopg.Connection[Any], student_id: UUID, key: str, request_hash: str
+    ) -> Optional[dict[str, Any]]:
+        ConsultationRepository.lock_student(conn, student_id)
+        if not key or not 1 <= len(key) <= 160:
+            raise HTTPException(422, "Idempotency-Key of 1 to 128 characters required.")
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT request_hash, response_body FROM idempotency_keys "
+                "WHERE key = %s AND student_id = %s",
+                (key, student_id),
+            )
+            existing = cur.fetchone()
+            if existing:
+                if existing["request_hash"] != request_hash:
+                    raise HTTPException(409, "Idempotency-Key reused for different input.")
+                response = dict(existing["response_body"])
+                if "_error_detail" in response:
+                    raise HTTPException(422, response["_error_detail"])
+                return response
+            ConsultationRepository.check_and_record_idempotency_key(
+                conn, key, student_id, request_hash
+            )
+        return None
+
+    @staticmethod
+    def finish_request(
+        conn: psycopg.Connection[Any], student_id: UUID, key: str, response: dict[str, Any]
+    ) -> None:
+        from datetime import datetime
+
+        def default_serializer(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return str(obj)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE idempotency_keys SET response_body = %s::jsonb "
+                "WHERE key = %s AND student_id = %s",
+                (json.dumps(response, default=default_serializer), key, student_id),
+            )
+
+    @staticmethod
+    def get_telegram_chat_id(conn: psycopg.Connection[Any], student_id: UUID) -> Optional[int]:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT telegram_chat_id FROM students WHERE id = %s", (student_id,))
+            row = cur.fetchone()
+            return int(row["telegram_chat_id"]) if row else None

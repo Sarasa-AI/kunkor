@@ -23,6 +23,19 @@ from app.workers.outbox_worker import process_pending_outbox_events
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def synthetic_telegram(monkeypatch):
+    from app.core.config import settings
+    from app.workers import outbox_worker
+
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "synthetic-webhook-secret")
+    monkeypatch.setattr(settings, "NINEROUTER_ENABLED", False)
+    monkeypatch.setattr(outbox_worker, "send_message", lambda chat_id, text: 12345)
+    client.headers["X-Telegram-Bot-Api-Secret-Token"] = "synthetic-webhook-secret"
+    yield
+    client.headers.pop("X-Telegram-Bot-Api-Secret-Token", None)
+
+
 def test_telegram_webhook_secret_verification(monkeypatch):
     """Verify endpoint rejects requests with invalid secret token when configured."""
     monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "super_secret_token_123")
@@ -46,7 +59,7 @@ async def test_complete_end_to_end_telegram_consultation_and_delivery():
     Simulate full student consultation journey from /start to validated study plan.
     """
     chat_id = int(str(uuid.uuid4().int)[:9])  # Unique Telegram chat ID
-    tg_user_id = chat_id + 1000
+    tg_user_id = chat_id
 
     # Step 1: /start greeting
     update_1 = {
@@ -129,6 +142,26 @@ async def test_complete_end_to_end_telegram_consultation_and_delivery():
     res_5 = client.post("/api/v1/telegram/webhook", json=update_5)
     assert res_5.status_code == 200
     data_5 = res_5.json()
+    assert data_5["step"] == "goal"
+    for offset, text, expected_step in [
+        (6, "مرور", "days"),
+        (7, "شنبه،دوشنبه", "session"),
+        (8, "25 دقیقه", "completed"),
+    ]:
+        response = client.post(
+            "/api/v1/telegram/webhook",
+            json={
+                "update_id": chat_id * 10 + offset,
+                "message": {
+                    "chat": {"id": chat_id, "type": "private"},
+                    "from": {"id": chat_id},
+                    "text": text,
+                },
+            },
+        )
+        assert response.status_code == 200
+        data_5 = response.json()
+        assert data_5["step"] == expected_step
     assert data_5["status"] == "plan_generated"
     assert data_5["step"] == "completed"
     assert data_5["revision_no"] == 1
@@ -165,6 +198,12 @@ async def test_complete_end_to_end_telegram_consultation_and_delivery():
             assert plan_row[2] == 1
             assert plan_row[3] == "konkur"
             assert plan_row[4] == "active"
+
+            cur.execute("SELECT intake_slots FROM study_plans WHERE id = %s", (plan_id,))
+            slots = cur.fetchone()[0]
+            assert slots["goal_code"] == "review"
+            assert slots["study_days"] == [5, 0]
+            assert slots["max_session_minutes"] == 25
 
             # 3. Study plan items with denormalized student_id
             cur.execute(

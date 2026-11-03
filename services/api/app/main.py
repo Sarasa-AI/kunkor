@@ -23,7 +23,17 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=bool(origins),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+        "Idempotency-Key",
+        "X-Student-Id",
+        "X-Admin-Api-Key",
+        "X-Telegram-Bot-Api-Secret-Token",
+    ],
 )
 
 

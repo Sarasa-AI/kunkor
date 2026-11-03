@@ -16,12 +16,15 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+from uuid import UUID
 
 import httpx
 
 from app.ai.pii import sanitize_intake_for_ai
+from app.ai.usage import reserve_daily_attempt
 from app.core.config import settings
+from app.engines.validator import TRACK_SUBJECT_ALLOWLIST
 from app.schemas.planning import STAGE_CAPACITY_LIMITS, IntakeSlots
 
 logger = logging.getLogger("kunkor.ai")
@@ -30,7 +33,7 @@ telemetry_logger = logging.getLogger("kunkor.telemetry.ai")
 
 @dataclass
 class ProviderBudget:
-    """Budget guard tracking USD spend."""
+    """Legacy local estimate guard; durable reservations enforce configured ceilings."""
 
     budget_limit_usd: float = 10.0
     current_spend_usd: float = 0.0
@@ -50,6 +53,7 @@ class AiProvider(ABC):
         self,
         intake: IntakeSlots,
         available_resources: list[dict[str, Any]],
+        completed_unit_ids: Optional[set[str]] = None,
     ) -> dict[str, Any]:
         """Propose a study plan structure."""
         pass
@@ -73,6 +77,8 @@ class DeterministicRuleFallbackPlanner:
             r
             for r in available_resources
             if r.get("stage_code") == intake.stage_code
+            and r.get("grade", intake.grade) == intake.grade
+            and r.get("subject", "mathematics") in TRACK_SUBJECT_ALLOWLIST[intake.track]
             and r.get("status") == "Published"
             and r.get("license_active", True)
             and not r.get("license_expired", False)
@@ -129,6 +135,7 @@ class NineRouterProvider(AiProvider):
         max_retries: Optional[int] = None,
         budget: Optional[ProviderBudget] = None,
         client: Optional[httpx.AsyncClient] = None,
+        usage_reserver: Optional[Callable[[UUID | None], bool]] = None,
     ):
         self.api_base_url = (api_base_url or settings.NINEROUTER_API_BASE).rstrip("/")
         self._api_key = api_key or settings.NINEROUTER_API_KEY or "test-key"
@@ -136,11 +143,23 @@ class NineRouterProvider(AiProvider):
         timeout_sec = (
             timeout_seconds if timeout_seconds is not None else settings.NINEROUTER_TIMEOUT_SECONDS
         )
+        if not 0 < timeout_sec <= 60:
+            raise ValueError("timeout_seconds must be in (0, 60].")
         self.timeout_seconds = timeout_sec
         retries = max_retries if max_retries is not None else settings.NINEROUTER_MAX_RETRIES
+        if not isinstance(retries, int) or not 0 <= retries <= 3:
+            raise ValueError("max_retries must be an integer in [0, 3].")
         self.max_retries = retries
         self.budget = budget or ProviderBudget()
         self._client = client
+        self.usage_student_id: UUID | None = None
+        # An explicit injected backend supports synthetic tests without a DB.
+        self._usage_reserver = usage_reserver if client is not None else None
+
+    def bind_student(self, student_id: UUID) -> None:
+        if not isinstance(student_id, UUID):
+            raise ValueError("Internal student UUID required.")
+        self.usage_student_id = student_id
 
     def _record_telemetry(
         self,
@@ -163,7 +182,7 @@ class NineRouterProvider(AiProvider):
                 "fallback_used": fallback_used,
                 "tokens_prompt": tokens_prompt,
                 "tokens_completion": tokens_completion,
-                "cost_usd": cost_usd,
+                "estimated_cost_usd": cost_usd,
             },
         )
 
@@ -171,17 +190,45 @@ class NineRouterProvider(AiProvider):
         self,
         intake: IntakeSlots,
         available_resources: list[dict[str, Any]],
+        completed_unit_ids: Optional[set[str]] = None,
     ) -> dict[str, Any]:
+        if self._client is None and not settings.NINEROUTER_ENABLED:
+            return DeterministicRuleFallbackPlanner.generate_fallback_plan(
+                intake, available_resources, completed_unit_ids=completed_unit_ids
+            )
         # 1. Budget Guard
         if not self.budget.has_budget():
             logger.warning("9router budget limit reached (%s USD).", self.budget.budget_limit_usd)
             self._record_telemetry(0.0, 429, 0, True)
             return DeterministicRuleFallbackPlanner.generate_fallback_plan(
-                intake, available_resources
+                intake, available_resources, completed_unit_ids=completed_unit_ids
             )
 
         # 2. Sanitize context (PII Masking per D-11)
         sanitized = sanitize_intake_for_ai(intake)
+        # Only structured educational metadata; no titles or arbitrary free text.
+        sanitized["resources"] = [
+            {
+                key: r[key]
+                for key in (
+                    "resource_id",
+                    "stage_code",
+                    "grade",
+                    "subject",
+                    "duration_minutes",
+                    "prerequisites",
+                )
+                if key in r
+            }
+            for r in available_resources
+            if r.get("stage_code") == intake.stage_code
+            and r.get("grade", intake.grade) == intake.grade
+            and r.get("subject", "mathematics") in TRACK_SUBJECT_ALLOWLIST[intake.track]
+            and r.get("status") == "Published"
+            and r.get("license_active", False)
+            and not r.get("license_expired", False)
+        ][:100]
+        sanitized["completed_unit_ids"] = sorted(completed_unit_ids or ())[:1000]
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -201,15 +248,29 @@ class NineRouterProvider(AiProvider):
                 {"role": "user", "content": json.dumps(sanitized)},
             ],
             "response_format": {"type": "json_object"},
+            "max_tokens": 2048,
         }
 
         attempts = 0
         last_error_code = 500
 
+        deadline = time.monotonic() + self.timeout_seconds
         while attempts <= self.max_retries:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             attempts += 1
             start_time = time.monotonic()
             try:
+                reserver = self._usage_reserver or reserve_daily_attempt
+                if not await asyncio.wait_for(
+                    asyncio.to_thread(reserver, self.usage_student_id), timeout=remaining
+                ):
+                    last_error_code = 429
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
                 if self._client:
                     response = await asyncio.wait_for(
                         self._client.post(
@@ -217,14 +278,17 @@ class NineRouterProvider(AiProvider):
                             json=payload,
                             headers=headers,
                         ),
-                        timeout=self.timeout_seconds,
+                        timeout=remaining,
                     )
                 else:
                     async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                        response = await client.post(
-                            f"{self.api_base_url}/v1/chat/completions",
-                            json=payload,
-                            headers=headers,
+                        response = await asyncio.wait_for(
+                            client.post(
+                                f"{self.api_base_url}/v1/chat/completions",
+                                json=payload,
+                                headers=headers,
+                            ),
+                            timeout=max(0.0, deadline - time.monotonic()),
                         )
 
                 duration_ms = (time.monotonic() - start_time) * 1000.0
@@ -273,7 +337,7 @@ class NineRouterProvider(AiProvider):
                         delay,
                     )
                     if attempts <= self.max_retries:
-                        await asyncio.sleep(min(delay, 2.0))
+                        await asyncio.sleep(min(delay, 2.0, max(0.0, deadline - time.monotonic())))
                         continue
 
                 # Handle transient 5xx server errors
@@ -288,7 +352,7 @@ class NineRouterProvider(AiProvider):
                         delay,
                     )
                     if attempts <= self.max_retries:
-                        await asyncio.sleep(min(delay, 2.0))
+                        await asyncio.sleep(min(delay, 2.0, max(0.0, deadline - time.monotonic())))
                         continue
 
                 # Non-retryable error (e.g. 400, 401, 500)
@@ -306,14 +370,18 @@ class NineRouterProvider(AiProvider):
                 )
                 last_error_code = 408 if isinstance(exc, asyncio.TimeoutError) else 503
                 if attempts <= self.max_retries:
-                    await asyncio.sleep(0.5 * (2 ** (attempts - 1)))
+                    await asyncio.sleep(
+                        min(2.0, 0.5 * (2 ** (attempts - 1)), max(0.0, deadline - time.monotonic()))
+                    )
                     continue
                 break
             except Exception as exc:
-                logger.error("Unexpected error contacting 9router: %s", exc)
+                logger.error("Unexpected error contacting 9router: %s", type(exc).__name__)
                 last_error_code = 500
                 break
 
         # Fallback path if all retries exhausted or non-retryable error
         self._record_telemetry(0.0, last_error_code, attempts, True)
-        return DeterministicRuleFallbackPlanner.generate_fallback_plan(intake, available_resources)
+        return DeterministicRuleFallbackPlanner.generate_fallback_plan(
+            intake, available_resources, completed_unit_ids=completed_unit_ids
+        )

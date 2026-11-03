@@ -76,6 +76,10 @@ class ResourceMeta:
     status: str = "Published"  # "Published", "Draft", "Archived"
     license_active: bool = True
     license_expired: bool = False
+    grade: str | None = None
+    subject: str | None = None
+    duration_minutes: int | None = None
+    prerequisites: tuple[str, ...] = ()
 
 
 # Allowed specialized subjects per track in upper_secondary / konkur
@@ -241,10 +245,36 @@ class DeterministicValidator:
         Master deterministic validation check.
         Must be invoked before database writes.
         """
+        if not plan.items:
+            raise MalformedPlanError("Plan items cannot be empty.")
+        if len({i.item_id for i in plan.items}) != len(plan.items) or len(
+            {i.resource_version_id for i in plan.items}
+        ) != len(plan.items):
+            raise MalformedPlanError("Duplicate plan item or resource IDs.")
         cls.validate_track_subjects(intake)
         cls.validate_study_time_limits(plan, intake)
         cls.validate_resource_licensing(plan.items, catalog, intake.stage_code)
         cls.validate_prerequisites(plan.items, completed_unit_ids)
+        for item in plan.items:
+            meta = catalog[item.resource_version_id]
+            if item.stage_code != intake.stage_code or (
+                meta.grade is not None and meta.grade != intake.grade
+            ):
+                raise StageMismatchError("Resource or item does not match student grade/stage.")
+            if (
+                meta.subject is not None
+                and meta.subject not in TRACK_SUBJECT_ALLOWLIST[intake.track]
+            ):
+                raise TrackSubjectMismatchError("Resource subject does not match student track.")
+            if meta.duration_minutes is not None and item.duration_minutes != meta.duration_minutes:
+                raise MalformedPlanError("Resource duration differs from trusted metadata.")
+            if (
+                set(item.prerequisites) != set(meta.prerequisites)
+                and meta.duration_minutes is not None
+            ):
+                raise PrerequisiteNotSatisfiedError(
+                    "Resource prerequisites differ from trusted metadata."
+                )
 
     @classmethod
     def validate_and_parse_proposal(

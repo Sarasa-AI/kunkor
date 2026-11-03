@@ -21,14 +21,25 @@ from app.main import app
 
 client = TestClient(app)
 
-ADMIN_HEADERS = {"X-Admin-Api-Key": settings.ADMIN_API_KEY}
+ADMIN_TEST_KEY = "synthetic-test-admin-key"
+ADMIN_HEADERS = {"X-Admin-Api-Key": ADMIN_TEST_KEY}
+WEBHOOK_HEADERS = {"X-Telegram-Bot-Api-Secret-Token": "synthetic-test-webhook-secret"}
+
+
+@pytest.fixture(autouse=True)
+def synthetic_credentials(monkeypatch):
+    monkeypatch.setattr(settings, "ADMIN_API_KEY", ADMIN_TEST_KEY)
+    monkeypatch.setattr(
+        settings, "TELEGRAM_WEBHOOK_SECRET", WEBHOOK_HEADERS["X-Telegram-Bot-Api-Secret-Token"]
+    )
 
 
 def _create_sample_student_with_plan(chat_id: int) -> dict[str, str]:
-    tg_user_id = chat_id + 1000
+    tg_user_id = chat_id
     # Step 1: /start
     client.post(
         "/api/v1/telegram/webhook",
+        headers=WEBHOOK_HEADERS,
         json={
             "update_id": chat_id * 10 + 1,
             "message": {
@@ -42,6 +53,7 @@ def _create_sample_student_with_plan(chat_id: int) -> dict[str, str]:
     # Step 2: stage
     client.post(
         "/api/v1/telegram/webhook",
+        headers=WEBHOOK_HEADERS,
         json={
             "update_id": chat_id * 10 + 2,
             "message": {
@@ -55,6 +67,7 @@ def _create_sample_student_with_plan(chat_id: int) -> dict[str, str]:
     # Step 3: track
     client.post(
         "/api/v1/telegram/webhook",
+        headers=WEBHOOK_HEADERS,
         json={
             "update_id": chat_id * 10 + 3,
             "message": {
@@ -68,6 +81,7 @@ def _create_sample_student_with_plan(chat_id: int) -> dict[str, str]:
     # Step 4: capacity
     client.post(
         "/api/v1/telegram/webhook",
+        headers=WEBHOOK_HEADERS,
         json={
             "update_id": chat_id * 10 + 4,
             "message": {
@@ -81,6 +95,7 @@ def _create_sample_student_with_plan(chat_id: int) -> dict[str, str]:
     # Step 5: weak subjects
     res5 = client.post(
         "/api/v1/telegram/webhook",
+        headers=WEBHOOK_HEADERS,
         json={
             "update_id": chat_id * 10 + 5,
             "message": {
@@ -92,6 +107,23 @@ def _create_sample_student_with_plan(chat_id: int) -> dict[str, str]:
         },
     )
     data = res5.json()
+    assert data["step"] == "goal"
+    for offset, text in [(101, "مدرسه"), (102, "هر روز"), (103, "30 دقیقه")]:
+        response = client.post(
+            "/api/v1/telegram/webhook",
+            headers=WEBHOOK_HEADERS,
+            json={
+                "update_id": chat_id * 10 + offset,
+                "message": {
+                    "chat": {"id": chat_id, "type": "private"},
+                    "from": {"id": chat_id},
+                    "text": text,
+                },
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+    assert data["status"] == "plan_generated"
     return {"student_id": data["student_id"], "plan_id": data["plan_id"]}
 
 
@@ -111,14 +143,14 @@ def test_admin_authentication_guards():
     # 3. Valid X-Admin-Api-Key -> 200
     res_good_key = client.get(
         "/api/v1/admin/students",
-        headers={"X-Admin-Api-Key": settings.ADMIN_API_KEY},
+        headers=ADMIN_HEADERS,
     )
     assert res_good_key.status_code == 200
 
     # 4. Valid Bearer Token in Authorization header -> 200
     res_bearer = client.get(
         "/api/v1/admin/students",
-        headers={"Authorization": f"Bearer {settings.ADMIN_API_KEY}"},
+        headers={"Authorization": f"Bearer {ADMIN_TEST_KEY}"},
     )
     assert res_bearer.status_code == 200
 
@@ -209,7 +241,7 @@ def test_student_entitlement_gating_integration():
     5. Expire entitlement -> Student blocked again.
     """
     chat_id = int(str(uuid.uuid4().int)[:9])
-    tg_user_id = chat_id + 1000
+    tg_user_id = chat_id
 
     # 1. Enable subscription entitlement gating flag
     res_flag = client.post(
@@ -227,6 +259,7 @@ def test_student_entitlement_gating_integration():
         # 2. Student attempts /start without entitlement
         res_blocked = client.post(
             "/api/v1/telegram/webhook",
+            headers=WEBHOOK_HEADERS,
             json={
                 "update_id": chat_id * 10 + 1,
                 "message": {
@@ -273,6 +306,7 @@ def test_student_entitlement_gating_integration():
         # 4. Student retries /start -> Now admitted!
         res_admitted = client.post(
             "/api/v1/telegram/webhook",
+            headers=WEBHOOK_HEADERS,
             json={
                 "update_id": chat_id * 10 + 2,
                 "message": {
@@ -303,6 +337,7 @@ def test_student_entitlement_gating_integration():
         # Student sends message -> blocked again
         res_blocked_again = client.post(
             "/api/v1/telegram/webhook",
+            headers=WEBHOOK_HEADERS,
             json={
                 "update_id": chat_id * 10 + 3,
                 "message": {

@@ -58,11 +58,21 @@ def has_valid_authz(route: object) -> bool:
     return False
 
 
+def iter_routes(routes):
+    """Include FastAPI's lazy router contexts with effective prefixes/dependencies."""
+    for route in routes:
+        contexts = getattr(route, "effective_route_contexts", None)
+        if contexts is not None:
+            yield from contexts()
+        else:
+            yield route
+
+
 def check_authz() -> int:
     unauthorized_routes = []
     total_routes = 0
 
-    for route in app.routes:
+    for route in iter_routes(app.routes):
         path = getattr(route, "path", None)
         methods = getattr(route, "methods", set())
         if not path:

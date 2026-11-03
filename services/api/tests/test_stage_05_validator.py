@@ -40,14 +40,14 @@ def test_intake_slots_forbids_arbitrary_injected_fields():
         )
 
 
-def test_intake_slots_enforces_guardian_consent_for_minors():
-    with pytest.raises(ValidationError, match="Guardian consent is mandatory"):
-        IntakeSlots(
-            stage_code="primary_low",
-            grade="G02",
-            daily_study_capacity_minutes=20,
-            guardian_consent=False,
-        )
+def test_intake_slots_does_not_enforce_deferred_guardian_policy():
+    slots = IntakeSlots(
+        stage_code="primary_low",
+        grade="G02",
+        daily_study_capacity_minutes=20,
+        guardian_consent=False,
+    )
+    assert slots.guardian_consent is False
 
 
 def test_intake_slots_rejects_exceeding_stage_ceiling():

@@ -9,131 +9,6 @@ from typing import Any
 
 from app.engines.validator import ResourceMeta
 
-# Curated metadata whitelist for educational consultation
-DEFAULT_RESOURCE_CATALOG: dict[str, ResourceMeta] = {
-    # --- Konkur: Experimental Track ---
-    "konkur_bio_g12_ch1": ResourceMeta(
-        resource_id="konkur_bio_g12_ch1",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_bio_g12_ch2": ResourceMeta(
-        resource_id="konkur_bio_g12_ch2",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_chem_g12_ch1": ResourceMeta(
-        resource_id="konkur_chem_g12_ch1",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_phys_g12_ch1": ResourceMeta(
-        resource_id="konkur_phys_g12_ch1",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_math_g12_calc": ResourceMeta(
-        resource_id="konkur_math_g12_calc",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    # --- Konkur: Math Track ---
-    "konkur_math_calc_limits": ResourceMeta(
-        resource_id="konkur_math_calc_limits",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_math_calc_derivatives": ResourceMeta(
-        resource_id="konkur_math_calc_derivatives",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_math_discrete": ResourceMeta(
-        resource_id="konkur_math_discrete",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_math_geom": ResourceMeta(
-        resource_id="konkur_math_geom",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    # --- Konkur: Humanities Track ---
-    "konkur_hum_literature": ResourceMeta(
-        resource_id="konkur_hum_literature",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_hum_sociology": ResourceMeta(
-        resource_id="konkur_hum_sociology",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    "konkur_hum_philosophy": ResourceMeta(
-        resource_id="konkur_hum_philosophy",
-        stage_code="konkur",
-        status="Published",
-        license_active=True,
-    ),
-    # --- Upper Secondary ---
-    "upper_math_g10_ch1": ResourceMeta(
-        resource_id="upper_math_g10_ch1",
-        stage_code="upper_secondary",
-        status="Published",
-        license_active=True,
-    ),
-    "upper_phys_g10_ch1": ResourceMeta(
-        resource_id="upper_phys_g10_ch1",
-        stage_code="upper_secondary",
-        status="Published",
-        license_active=True,
-    ),
-    "upper_chem_g11_ch1": ResourceMeta(
-        resource_id="upper_chem_g11_ch1",
-        stage_code="upper_secondary",
-        status="Published",
-        license_active=True,
-    ),
-    # --- Lower Secondary ---
-    "lower_math_g09_ch1": ResourceMeta(
-        resource_id="lower_math_g09_ch1",
-        stage_code="lower_secondary",
-        status="Published",
-        license_active=True,
-    ),
-    "lower_sci_g09_ch1": ResourceMeta(
-        resource_id="lower_sci_g09_ch1",
-        stage_code="lower_secondary",
-        status="Published",
-        license_active=True,
-    ),
-    # --- Primary ---
-    "primary_math_g05_ch1": ResourceMeta(
-        resource_id="primary_math_g05_ch1",
-        stage_code="primary_high",
-        status="Published",
-        license_active=True,
-    ),
-    "primary_read_g02_ch1": ResourceMeta(
-        resource_id="primary_read_g02_ch1",
-        stage_code="primary_low",
-        status="Published",
-        license_active=True,
-    ),
-}
-
-
 # Detailed metadata representation for AI prompt context
 RESOURCE_METADATA_DETAILS: list[dict[str, Any]] = [
     {
@@ -403,6 +278,34 @@ RESOURCE_METADATA_DETAILS: list[dict[str, Any]] = [
         "license_active": True,
     },
 ]
+
+
+# Local synthetic scheduling fixtures; bibliographic/count/duration claims are unverified.
+# license_active is a legacy metadata-scheduling flag, never a ContentLicense grant.
+for _resource in RESOURCE_METADATA_DETAILS:
+    _resource.update(
+        provenance="local_synthetic_fixture",
+        verification_status="UNVERIFIED",
+        domain_approval="PENDING",
+        authorization_scope="metadata_only_synthetic_evaluation",
+        full_content_access=False,
+        content_license_id=None,
+    )
+
+# Metadata whitelist approval does not grant permission to process/display full content.
+DEFAULT_RESOURCE_CATALOG: dict[str, ResourceMeta] = {
+    r["resource_id"]: ResourceMeta(
+        resource_id=r["resource_id"],
+        stage_code=r["stage_code"],
+        grade=r["grade"],
+        subject=r["subject"],
+        duration_minutes=r["duration_minutes"],
+        prerequisites=tuple(r["prerequisites"]),
+        status=r["status"],
+        license_active=r["license_active"],
+    )
+    for r in RESOURCE_METADATA_DETAILS
+}
 
 
 def get_resources_for_stage(stage_code: str) -> list[dict[str, Any]]:
