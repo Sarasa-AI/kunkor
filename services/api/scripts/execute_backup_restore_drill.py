@@ -115,7 +115,8 @@ def seed_synthetic_data(db_url: str) -> dict[str, int]:
             cur.execute(
                 """
                 INSERT INTO study_plan_items
-                    (id, plan_id, student_id, item_order, resource_version_id, stage_code, duration_minutes)
+                    (id, plan_id, student_id, item_order, resource_version_id,
+                     stage_code, duration_minutes)
                 VALUES (gen_random_uuid(), %s, %s, 1, 'konkur_bio_g12_ch1', 'konkur', 60),
                        (gen_random_uuid(), %s, %s, 2, 'konkur_chem_g12_ch1', 'konkur', 60),
                        (gen_random_uuid(), %s, %s, 1, 'upper_math_g10_ch1', 'upper_secondary', 45),
@@ -332,7 +333,9 @@ def execute_drill() -> dict:
 
     # Step 2: Apply migrations on source
     applied_migrations = apply_migrations(source_url)
-    assert applied_migrations >= 5, f"Expected at least 5 migrations applied, got {applied_migrations}"
+    assert applied_migrations >= 5, (
+        f"Expected at least 5 migrations applied, got {applied_migrations}"
+    )
 
     # Step 3: Seed representative synthetic data
     seed_stats = seed_synthetic_data(source_url)

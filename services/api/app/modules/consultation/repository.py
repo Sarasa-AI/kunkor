@@ -486,7 +486,7 @@ class ConsultationRepository:
     ) -> None:
         from datetime import datetime
 
-        def default_serializer(obj):
+        def default_serializer(obj: Any) -> str:
             if isinstance(obj, datetime):
                 return obj.isoformat()
             return str(obj)

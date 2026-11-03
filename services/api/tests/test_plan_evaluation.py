@@ -1,4 +1,5 @@
-"""Offline metrics describe synthetic consistency and boundary handling, never educational usefulness."""
+"""Offline metrics describe synthetic consistency and boundary handling,
+never educational usefulness."""
 
 from app.engines.catalog import RESOURCE_METADATA_DETAILS
 from scripts.evaluate_plans import evaluate

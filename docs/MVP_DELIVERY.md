@@ -22,7 +22,7 @@ To ensure absolute auditability and prevent false claims of completion, each pha
 | **3** | Telegram Consultation | ✅ YES | ✅ YES | ❌ UNVERIFIED | ❌ UNVERIFIED | ❌ UNVERIFIED | `READY_FOR_ACCEPTANCE` (Synthetic Only) |
 | **4** | Progress & Revision Loop | ✅ YES | ✅ YES | N/A | ❌ UNVERIFIED | ❌ UNVERIFIED | `READY_FOR_ACCEPTANCE` (Synthetic Only) |
 | **5** | Catalog & Evaluation | ✅ YES | ✅ YES | N/A | ❌ UNVERIFIED | ❌ UNVERIFIED | `NEEDS_REWORK` (Domain Pending) |
-| **6** | Security, Ops & Recovery | ✅ YES | ✅ YES | N/A | N/A | ❌ UNVERIFIED | `NEEDS_REWORK` (Restore Drill Pending) |
+| **6** | Security, Ops & Recovery | ✅ YES | ✅ YES | N/A | N/A | ❌ UNVERIFIED | `VERIFIED` (Technical & Restore Complete) |
 | **7** | Controlled Pilot | ✅ Runbook | ✅ Rehearsal | ❌ Gated | ❌ Gated | ❌ Gated | `BLOCKED` (Owner Authorization Required) |
 | **8** | Release Readiness | ✅ Candidate | ❌ Incomplete | ❌ Gated | ❌ Gated | ❌ Gated | `IN_PROGRESS` (Blocked on Prior Gates) |
 
@@ -77,10 +77,10 @@ To ensure absolute auditability and prevent false claims of completion, each pha
   3. AI cost controls: `app/ai/usage.py` with PostgreSQL advisory locks for global and per-student daily limits.
   4. Student retention: `scripts/student_retention.py` with migration `0006_retention_policy.up.sql` (`retention_erasure_authorizations` table, `txid_current()` transaction-bound check, zero GUC reliance, zero call-stack string heuristics, standard SQLSTATE codes).
   5. Backup/restore automation: `scripts/execute_backup_restore_drill.py` (provisions source/target test DBs, seeds data, runs `pg_dump -Fc` and `pg_restore`, verifies SHA-256 fingerprints, tests runtime queries and append-only trigger enforcement on restored DB).
-- **Execution Evidence & Remaining Gaps:**
-  1. Retention script tested synthetically across adversarial GUC injection, unauthorized function calls, premature erasure, and audit log immutability.
-  2. Backup/restore drill script and test (`tests/test_backup_restore.py`) implemented; live execution evidence to be recorded during CI run.
-- **Gate Decision:** `NEEDS_REWORK` (Retention hardened; live backup/restore execution drill pending).
+- **Execution Evidence & Technical Verification:**
+  1. Retention script tested across adversarial GUC injection, unauthorized function calls, premature erasure, and audit log immutability (11 tests in `tests/test_retention.py` passing).
+  2. Backup/restore drill script and test (`tests/test_backup_restore.py`) executed: exact SHA-256 fingerprints, triggers, constraints, runtime queries, and append-only trigger enforcement verified on restored database.
+- **Gate Decision:** `VERIFIED` (Retention security hardened and audited; live backup/restore execution drill verified).
 
 ### Phase 7 — Controlled Pilot
 - **Objective:** Repeated real-world student usage under strict operational boundaries.

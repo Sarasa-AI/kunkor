@@ -6,7 +6,7 @@ Enforces:
 - Age cutoff verification against student latest activity.
 - Cryptographic token commitment (raw 256-bit token passed; stored as SHA-256 hash).
 - Explicit, independently verified authorization table (retention_erasure_authorizations).
-- Privileged PostgreSQL function execution (execute_student_retention_erasure) with locked search_path.
+- Privileged PostgreSQL function execution with locked search_path.
 - Transaction-bound trigger verification using txid_current().
 - Zero GUC reliance; zero PG_CONTEXT string inspection.
 - Transactional deletion of all linked student data in strict foreign-key order.
@@ -115,7 +115,11 @@ def check_student_activity_age(
         latest_activity = row["updated_at"] or row["created_at"]
 
         cur.execute(
-            "SELECT MAX(created_at) AS latest_progress FROM daily_progress_logs WHERE student_id = %s",
+            """
+            SELECT MAX(created_at) AS latest_progress
+            FROM daily_progress_logs
+            WHERE student_id = %s
+            """,
             (student_id,),
         )
         prog_row = cur.fetchone()
@@ -286,19 +290,21 @@ def main() -> int:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1
 
-        print(
-            json.dumps(
-                {
-                    "status": "erased",
-                    "student_id": "REDACTED",
-                    "retention_days": args.retention_days,
-                    "erased_counts": erased_counts,
-                    "message": "Student data successfully erased under privileged retention policy.",
-                },
-                indent=2,
-            )
+    print(
+        json.dumps(
+            {
+                "status": "erased",
+                "student_id": "REDACTED",
+                "retention_days": args.retention_days,
+                "erased_counts": erased_counts,
+                "message": (
+                    "Student data successfully erased under privileged retention policy."
+                ),
+            },
+            indent=2,
         )
-        return 0
+    )
+    return 0
 
 
 if __name__ == "__main__":

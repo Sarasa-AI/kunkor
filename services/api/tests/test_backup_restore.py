@@ -1,6 +1,5 @@
 """Automated test for PostgreSQL backup and restoration verification drill."""
 
-
 from scripts.execute_backup_restore_drill import execute_drill
 
 

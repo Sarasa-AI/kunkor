@@ -30,7 +30,8 @@ def _seed_test_student(conn, inactive_days: int = 100):
         # Student
         cur.execute(
             """
-            INSERT INTO students (id, telegram_chat_id, telegram_user_id, first_name, created_at, updated_at)
+            INSERT INTO students
+                (id, telegram_chat_id, telegram_user_id, first_name, created_at, updated_at)
             VALUES (%s, %s, %s, 'Synthetic Test Student', %s, %s);
             """,
             (student_id, unique_chat_id, unique_chat_id, old_date, old_date),
@@ -39,7 +40,8 @@ def _seed_test_student(conn, inactive_days: int = 100):
         # Intake session
         cur.execute(
             """
-            INSERT INTO intake_sessions (student_id, current_step, slots, is_completed, created_at, updated_at)
+            INSERT INTO intake_sessions
+                (student_id, current_step, slots, is_completed, created_at, updated_at)
             VALUES (%s, 'completed', '{"stage_code": "konkur"}'::jsonb, TRUE, %s, %s);
             """,
             (student_id, old_date, old_date),
@@ -57,7 +59,9 @@ def _seed_test_student(conn, inactive_days: int = 100):
         # Study plan item
         cur.execute(
             """
-            INSERT INTO study_plan_items (id, plan_id, student_id, item_order, resource_version_id, stage_code, duration_minutes)
+            INSERT INTO study_plan_items
+                (id, plan_id, student_id, item_order, resource_version_id,
+                 stage_code, duration_minutes)
             VALUES (%s, %s, %s, 1, 'res-bio-01', 'konkur', 60);
             """,
             (item_id, plan_id, student_id),
@@ -66,7 +70,9 @@ def _seed_test_student(conn, inactive_days: int = 100):
         # Daily progress log (append-only table)
         cur.execute(
             """
-            INSERT INTO daily_progress_logs (student_id, plan_id, revision_no, completed_units, missed_units, duration_spent_minutes, created_at)
+            INSERT INTO daily_progress_logs
+                (student_id, plan_id, revision_no, completed_units, missed_units,
+                 duration_spent_minutes, created_at)
             VALUES (%s, %s, 1, '["res-bio-01"]'::jsonb, '[]'::jsonb, 60, %s);
             """,
             (student_id, plan_id, old_date),
@@ -75,7 +81,8 @@ def _seed_test_student(conn, inactive_days: int = 100):
         # Outbox event
         cur.execute(
             """
-            INSERT INTO outbox_events (student_id, event_type, aggregate_type, aggregate_id, payload, occurred_at)
+            INSERT INTO outbox_events
+                (student_id, event_type, aggregate_type, aggregate_id, payload, occurred_at)
             VALUES (%s, 'STUDY_PLAN_DELIVERY_REQUESTED', 'study_plan', %s, '{}'::jsonb, %s);
             """,
             (student_id, str(plan_id), old_date),
@@ -164,14 +171,14 @@ def test_adversarial_guc_manipulation_cannot_bypass_append_only():
                     (str(victim_id),),
                 )
                 cur.execute(
-                    "SELECT set_config('kunkor.retention_execution_nonce', 'attacker_fake_nonce_12345', true);",
+                    "SELECT set_config('kunkor.retention_execution_nonce', 'fake_nonce', true);"
                 )
                 cur.execute(
                     "SELECT set_config('kunkor.authorized_erasure_student_id', %s, true);",
                     (str(victim_id),),
                 )
 
-                # 2. Attacker executes direct DELETE -> MUST FAIL WITH 42501 (insufficient_privilege)
+                # 2. Attacker executes direct DELETE -> MUST FAIL WITH 42501
                 with pytest.raises(psycopg.Error) as exc_info:
                     cur.execute(
                         "DELETE FROM daily_progress_logs WHERE student_id = %s;",
@@ -211,7 +218,7 @@ def test_adversarial_direct_insert_authorization_denied():
                     """,
                     (active_student_id, fake_token_hash),
                 )
-                # Attempt to call execute_student_retention_erasure with 0 retention days on active student
+                # Attempt to call execute_student_retention_erasure with 0 days
                 # Function must check student's actual activity and REJECT (42501)
                 with pytest.raises(psycopg.Error) as exc_info:
                     cur.execute(
