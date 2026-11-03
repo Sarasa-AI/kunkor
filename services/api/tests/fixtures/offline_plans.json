@@ -1,0 +1,126 @@
+{
+  "version": 2,
+  "kind": "synthetic_offline",
+  "cases": [
+    {
+      "id": "primary_low",
+      "scenario_type": "positive_generation",
+      "expected_outcome": "generate_plan",
+      "expected_refusal_reason": null,
+      "intake": {
+        "stage_code": "primary_low",
+        "grade": "G02",
+        "daily_study_capacity_minutes": 30,
+        "weak_subjects": ["reading_fluency"]
+      },
+      "available": true
+    },
+    {
+      "id": "primary_high",
+      "scenario_type": "positive_generation",
+      "expected_outcome": "generate_plan",
+      "expected_refusal_reason": null,
+      "intake": {
+        "stage_code": "primary_high",
+        "grade": "G05",
+        "daily_study_capacity_minutes": 60,
+        "weak_subjects": ["mathematics"]
+      },
+      "available": true
+    },
+    {
+      "id": "lower_secondary",
+      "scenario_type": "positive_generation",
+      "expected_outcome": "generate_plan",
+      "expected_refusal_reason": null,
+      "intake": {
+        "stage_code": "lower_secondary",
+        "grade": "G09",
+        "daily_study_capacity_minutes": 90,
+        "weak_subjects": ["science"]
+      },
+      "available": true
+    },
+    {
+      "id": "upper_secondary",
+      "scenario_type": "positive_generation",
+      "expected_outcome": "generate_plan",
+      "expected_refusal_reason": null,
+      "intake": {
+        "stage_code": "upper_secondary",
+        "grade": "G10",
+        "track": "experimental",
+        "daily_study_capacity_minutes": 90,
+        "weak_subjects": ["physics"]
+      },
+      "available": true
+    },
+    {
+      "id": "konkur_experimental",
+      "scenario_type": "positive_generation",
+      "expected_outcome": "generate_plan",
+      "expected_refusal_reason": null,
+      "intake": {
+        "stage_code": "konkur",
+        "grade": "G12",
+        "track": "experimental",
+        "daily_study_capacity_minutes": 180,
+        "weak_subjects": ["biology"]
+      },
+      "available": true
+    },
+    {
+      "id": "konkur_mathematics",
+      "scenario_type": "positive_generation",
+      "expected_outcome": "generate_plan",
+      "expected_refusal_reason": null,
+      "intake": {
+        "stage_code": "konkur",
+        "grade": "G12",
+        "track": "mathematics",
+        "daily_study_capacity_minutes": 180,
+        "weak_subjects": ["calculus"]
+      },
+      "available": true
+    },
+    {
+      "id": "konkur_humanities",
+      "scenario_type": "positive_generation",
+      "expected_outcome": "generate_plan",
+      "expected_refusal_reason": null,
+      "intake": {
+        "stage_code": "konkur",
+        "grade": "G12",
+        "track": "humanities",
+        "daily_study_capacity_minutes": 180,
+        "weak_subjects": ["sociology"]
+      },
+      "available": true
+    },
+    {
+      "id": "missing_grade",
+      "scenario_type": "negative_boundary",
+      "expected_outcome": "refuse_plan",
+      "expected_refusal_reason": "no_matching_resources_for_grade",
+      "intake": {
+        "stage_code": "primary_high",
+        "grade": "G04",
+        "daily_study_capacity_minutes": 30
+      },
+      "available": false
+    },
+    {
+      "id": "insufficient_time",
+      "scenario_type": "negative_boundary",
+      "expected_outcome": "refuse_plan",
+      "expected_refusal_reason": "capacity_below_minimum_resource_duration",
+      "intake": {
+        "stage_code": "konkur",
+        "grade": "G12",
+        "track": "experimental",
+        "daily_study_capacity_minutes": 10
+      },
+      "available": false
+    }
+  ]
+}
