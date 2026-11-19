@@ -69,11 +69,11 @@ def require_test_database(db_url: str) -> None:
     except Exception as exc:
         raise ValueError(f"Invalid connection string format: {exc}") from exc
 
-    dbname = conn_dict.get("dbname", "")
+    dbname = str(conn_dict.get("dbname", ""))
     if not dbname or not dbname.endswith("_test"):
         raise ValueError("Destructive checks require a disposable database named *_test.")
 
-    host = conn_dict.get("host")
+    host = str(conn_dict.get("host") or "")
     if host and host not in ALLOWED_TEST_HOSTS and not host.endswith(".local"):
         raise ValueError(
             f"Destructive checks restricted to local/disposable hosts; host '{host}' rejected."

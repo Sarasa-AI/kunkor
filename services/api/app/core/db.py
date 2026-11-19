@@ -43,5 +43,5 @@ def check_db_health(test: bool = False) -> bool:
                 row = cur.fetchone()
                 return bool(row and row["healthy"] == 1)
     except Exception as exc:
-        logger.error("Database health check failed: %s", exc)
+        logger.error("Database health check failed: %s", type(exc).__name__)
         return False

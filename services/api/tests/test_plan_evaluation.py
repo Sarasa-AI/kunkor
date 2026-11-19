@@ -1,12 +1,12 @@
 """Offline metrics describe synthetic consistency and boundary handling,
 never educational usefulness."""
 
-from app.engines.catalog import RESOURCE_METADATA_DETAILS
 from scripts.evaluate_plans import evaluate
+from tests.synthetic_catalog import SYNTHETIC_RESOURCES
 
 
 def test_synthetic_catalog_never_claims_content_authorization():
-    for resource in RESOURCE_METADATA_DETAILS:
+    for resource in SYNTHETIC_RESOURCES:
         assert resource["verification_status"] == "UNVERIFIED"
         assert resource["domain_approval"] == "PENDING"
         assert resource["provenance"] == "local_synthetic_fixture"

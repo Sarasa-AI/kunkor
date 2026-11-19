@@ -79,7 +79,7 @@ class IntakeSlots(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_grade_and_consent(self) -> "IntakeSlots":
+    def validate_educational_constraints(self) -> "IntakeSlots":
         maximum = self.max_session_minutes
         if maximum is None:
             object.__setattr__(

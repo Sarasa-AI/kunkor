@@ -13,6 +13,15 @@ from pathlib import Path
 
 import psycopg
 
+# Keep the direct CLI usable without an externally supplied PYTHONPATH.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.deployment import (  # noqa: E402
+    normalize_environment,
+    validate_production_database_url,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("migrate")
 
@@ -20,16 +29,14 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 
 def get_db_url(custom_url: str | None = None) -> str:
-    if custom_url:
-        return custom_url
-    url = os.getenv("DATABASE_URL")
-    env = os.getenv("ENVIRONMENT", "development").lower()
+    env = normalize_environment(os.getenv("ENVIRONMENT", "development"))
+    url = custom_url or os.getenv("DATABASE_URL")
     if not url:
         if env == "production":
             raise ValueError("DATABASE_URL environment variable is required in production.")
         return "postgresql://kunkor:kunkor_dev_password@localhost:5435/kunkor_dev"
-    if env == "production" and "kunkor_dev_password" in url:
-        raise ValueError("Insecure default credentials prohibited in production.")
+    if env == "production":
+        validate_production_database_url(url)
     return url
 
 
@@ -141,9 +148,9 @@ def main() -> int:
     parser.add_argument("--dsn", type=str, default=None, help="Database connection string")
 
     args = parser.parse_args()
-    db_url = get_db_url(args.dsn)
 
     try:
+        db_url = get_db_url(args.dsn)
         if args.rollback:
             steps = args.steps if args.steps is not None else 1
             rollback_migrations(db_url, steps=steps)
@@ -151,7 +158,7 @@ def main() -> int:
             apply_migrations(db_url, steps=args.steps)
         return 0
     except Exception as exc:
-        logger.error("Migration failed: %s", exc)
+        logger.error("Migration failed: %s", type(exc).__name__)
         return 1
 
 

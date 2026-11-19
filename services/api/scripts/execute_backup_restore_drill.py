@@ -2,8 +2,8 @@
 
 Executes a complete, reproducible backup-and-restore drill between two
 isolated, disposable loopback test databases:
-1. Provisions kunkor_backup_source_test and kunkor_backup_target_test.
-2. Applies migrations 0001 through 0006 on source database.
+1. Creates unique source and target databases on an explicit loopback test host.
+2. Applies all discovered migrations on the source database.
 3. Seeds representative synthetic data across all required tables.
 4. Dumps source database using pg_dump.
 5. Restores dump into target database using pg_restore.
@@ -23,46 +23,33 @@ from uuid import uuid4
 
 import psycopg
 from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from scripts.migrate import apply_migrations
+from scripts.migrate_check import require_test_database
 from scripts.verify_restore import fingerprint
 
 
 def get_base_dsn() -> str:
-    if os.getenv("TEST_PG_HOST_DSN"):
-        return os.environ["TEST_PG_HOST_DSN"]
-    test_db = os.getenv(
-        "TEST_DATABASE_URL",
-        "postgresql://kunkor:kunkor_dev_password@127.0.0.1:5435/kunkor_test",
-    )
-    info = conninfo_to_dict(test_db)
-    user = info.get("user", "kunkor")
-    password = info.get("password", "kunkor_dev_password")
-    host = info.get("host", "127.0.0.1")
-    port = info.get("port", "5435")
-    return f"postgresql://{user}:{password}@{host}:{port}/postgres"
+    test_db = os.getenv("TEST_DATABASE_URL", "")
+    require_test_database(test_db)
+    base = os.getenv("TEST_PG_HOST_DSN") or make_conninfo(test_db, dbname="postgres")
+    if conninfo_to_dict(base).get("host") not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("Backup drills require an explicit loopback test host.")
+    return make_conninfo(base, dbname="postgres")
 
 
 def build_db_url(base_dsn: str, dbname: str) -> str:
-    info = conninfo_to_dict(base_dsn)
-    user = info.get("user", "kunkor")
-    password = info.get("password", "kunkor_dev_password")
-    host = info.get("host", "127.0.0.1")
-    port = info.get("port", "5435")
-    return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+    return make_conninfo(base_dsn, dbname=dbname)
 
 
-def recreate_database(base_dsn: str, dbname: str) -> None:
-    if not dbname.endswith("_test"):
-        raise ValueError("Only disposable databases named *_test can be dropped/recreated.")
+def create_database(base_dsn: str, dbname: str) -> None:
+    require_test_database(build_db_url(base_dsn, dbname))
+    if conninfo_to_dict(base_dsn).get("host") not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("Backup drills require an explicit loopback test host.")
     with psycopg.connect(base_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE);").format(
-                    sql.Identifier(dbname)
-                )
-            )
+            # Never drop or reuse a database that might belong to another run.
             cur.execute(sql.SQL("CREATE DATABASE {};").format(sql.Identifier(dbname)))
 
 
@@ -239,9 +226,9 @@ def run_dump(dump_file: Path, db_name: str, conn_info: dict) -> None:
         if proc.returncode == 0:
             return
 
-    container = os.getenv("DOCKER_PG_CONTAINER", "kunkor-stage0-test-pg")
+    container = os.getenv("DOCKER_PG_CONTAINER")
     docker_bin = shutil.which("docker")
-    if docker_bin:
+    if docker_bin and container:
         container_tmp = f"/tmp/dump_{db_name}.dump"
         cmd = [
             docker_bin,
@@ -257,7 +244,7 @@ def run_dump(dump_file: Path, db_name: str, conn_info: dict) -> None:
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
-            raise RuntimeError(f"docker pg_dump failed: {proc.stderr}")
+            raise RuntimeError(f"docker pg_dump failed (exit {proc.returncode}).")
         # Copy to host
         cp_proc = subprocess.run(
             [docker_bin, "cp", f"{container}:{container_tmp}", str(dump_file)],
@@ -266,7 +253,7 @@ def run_dump(dump_file: Path, db_name: str, conn_info: dict) -> None:
         )
         subprocess.run([docker_bin, "exec", container, "rm", "-f", container_tmp])
         if cp_proc.returncode != 0:
-            raise RuntimeError(f"docker cp failed: {cp_proc.stderr}")
+            raise RuntimeError(f"docker cp failed (exit {cp_proc.returncode}).")
         return
     raise RuntimeError("Neither compatible host pg_dump nor docker pg_dump succeeded.")
 
@@ -287,12 +274,13 @@ def run_restore(dump_file: Path, db_name: str, conn_info: dict) -> None:
             str(dump_file),
         ]
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
-        if proc.returncode in (0, 1):
+        if proc.returncode == 0:
             return
+        raise RuntimeError(f"pg_restore failed (exit {proc.returncode}).")
 
-    container = os.getenv("DOCKER_PG_CONTAINER", "kunkor-stage0-test-pg")
+    container = os.getenv("DOCKER_PG_CONTAINER")
     docker_bin = shutil.which("docker")
-    if docker_bin:
+    if docker_bin and container:
         container_tmp = f"/tmp/restore_{db_name}.dump"
         # Copy dump to container
         cp_proc = subprocess.run(
@@ -301,7 +289,7 @@ def run_restore(dump_file: Path, db_name: str, conn_info: dict) -> None:
             text=True,
         )
         if cp_proc.returncode != 0:
-            raise RuntimeError(f"docker cp failed: {cp_proc.stderr}")
+            raise RuntimeError(f"docker cp failed (exit {cp_proc.returncode}).")
         cmd = [
             docker_bin,
             "exec",
@@ -314,22 +302,23 @@ def run_restore(dump_file: Path, db_name: str, conn_info: dict) -> None:
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         subprocess.run([docker_bin, "exec", container, "rm", "-f", container_tmp])
-        if proc.returncode in (0, 1):
+        if proc.returncode == 0:
             return
-        raise RuntimeError(f"docker pg_restore failed: {proc.stderr}")
+        raise RuntimeError(f"docker pg_restore failed (exit {proc.returncode}).")
     raise RuntimeError("Neither compatible host pg_restore nor docker pg_restore succeeded.")
 
 
 def execute_drill() -> dict:
     base_dsn = get_base_dsn()
-    source_db = "kunkor_backup_source_test"
-    target_db = "kunkor_backup_target_test"
+    run_id = uuid4().hex
+    source_db = f"kunkor_backup_source_{run_id}_test"
+    target_db = f"kunkor_backup_target_{run_id}_test"
     source_url = build_db_url(base_dsn, source_db)
     target_url = build_db_url(base_dsn, target_db)
 
-    # Step 1: Recreate source and target DBs
-    recreate_database(base_dsn, source_db)
-    recreate_database(base_dsn, target_db)
+    # Step 1: Create fresh source and target DBs, preserving every existing DB.
+    create_database(base_dsn, source_db)
+    create_database(base_dsn, target_db)
 
     # Step 2: Apply migrations on source
     applied_migrations = apply_migrations(source_url)
@@ -368,11 +357,13 @@ def execute_drill() -> dict:
         with conn.cursor() as cur:
             # Query students
             cur.execute("SELECT COUNT(*) FROM students;")
-            assert cur.fetchone()[0] == 2
+            student_count = cur.fetchone()
+            assert student_count is not None and student_count[0] == 2
 
             # Query study plans
             cur.execute("SELECT COUNT(*) FROM study_plans;")
-            assert cur.fetchone()[0] == 2
+            plan_count = cur.fetchone()
+            assert plan_count is not None and plan_count[0] == 2
 
             # Test insert on restored audit_events
             cur.execute(
@@ -382,7 +373,9 @@ def execute_drill() -> dict:
                 RETURNING id;
                 """
             )
-            inserted_id = cur.fetchone()[0]
+            inserted = cur.fetchone()
+            assert inserted is not None
+            inserted_id = inserted[0]
             assert inserted_id is not None
 
             # Verify append-only trigger still active and rejects UPDATE on restored DB

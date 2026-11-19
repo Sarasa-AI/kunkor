@@ -40,7 +40,7 @@ def test_intake_slots_forbids_arbitrary_injected_fields():
         )
 
 
-def test_intake_slots_does_not_enforce_deferred_guardian_policy():
+def test_intake_boolean_profile_assertion_is_independent_of_educational_constraints():
     slots = IntakeSlots(
         stage_code="primary_low",
         grade="G02",

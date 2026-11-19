@@ -32,6 +32,9 @@ TEST_DB_URL = os.getenv(
 )
 
 
+pytestmark = pytest.mark.usefixtures("synthetic_planner_catalog")
+
+
 @pytest.fixture(autouse=True)
 def clean_db(monkeypatch):
     """Ensure clean database before and after each test."""
@@ -387,6 +390,7 @@ def test_web_intake_replay_conflict_and_structured_constraints(test_student):
     # Compare semantically equal responses (normalize datetime format)
     first_json = first.json()
     replay_json = replay.json()
+
     # Normalize created_at format for comparison
     def normalize_created_at(obj):
         if isinstance(obj, dict):

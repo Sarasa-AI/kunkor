@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: kunkor_dev_password
       POSTGRES_DB: kunkor_dev
     ports:
-      - "${POSTGRES_PORT:-5435}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5435}:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./services/api/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro

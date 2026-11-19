@@ -20,6 +20,8 @@ from app.core.db import get_connection_string
 from app.main import app
 from app.workers.outbox_worker import process_pending_outbox_events
 
+pytestmark = pytest.mark.usefixtures("synthetic_planner_catalog")
+
 client = TestClient(app)
 
 
@@ -235,7 +237,7 @@ async def test_complete_end_to_end_telegram_consultation_and_delivery():
             assert outbox_row[4] is None  # Not processed yet
 
     # 5. Outbox Worker Dispatching
-    processed = process_pending_outbox_events(test=True)
+    processed = process_pending_outbox_events(limit=500, test=True)
     assert processed >= 1
 
     # Verify event is marked processed

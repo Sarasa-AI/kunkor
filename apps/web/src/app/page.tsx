@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 interface HealthStatus {
   status: string;
@@ -12,8 +13,7 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    fetch(`${apiUrl}/healthz`)
+    fetch("/api/healthz")
       .then((res) => {
         if (!res.ok) {
           throw new Error(`خطای سرور: ${res.status}`);
@@ -74,6 +74,11 @@ export default function HomePage() {
           </p>
         )}
       </section>
+      <nav aria-label="مدیریت محتوا" style={{ marginTop: "24px" }}>
+        <Link href="/admin/content" style={{ color: "#854d0e", textUnderlineOffset: "3px" }}>
+          مدیریت منابع و محتوای آموزشی
+        </Link>
+      </nav>
     </main>
   );
 }

@@ -138,7 +138,7 @@ def test_sec_05_authz_checker_rejects_dummy_dependency():
     assert not has_valid_authz(route)
 
 
-def test_sec_05_authz_checker_accepts_security_marker():
+def test_sec_05_authz_checker_rejects_marker_without_dependency():
     test_app = FastAPI()
 
     def protected_endpoint():
@@ -148,7 +148,7 @@ def test_sec_05_authz_checker_accepts_security_marker():
     test_app.add_api_route("/protected", protected_endpoint)
 
     route = test_app.routes[-1]
-    assert has_valid_authz(route)
+    assert not has_valid_authz(route)
 
 
 def test_outbox_worker_increments_retry_on_failure(monkeypatch):
@@ -169,7 +169,7 @@ def test_outbox_worker_increments_retry_on_failure(monkeypatch):
 
     import app.workers.outbox_worker as ow
 
-    def mock_publish(event):
+    def mock_publish(event, conn):
         if event.get("id") == event_id:
             raise RuntimeError("Intentional delivery failure")
 

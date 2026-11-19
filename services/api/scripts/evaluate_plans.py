@@ -13,9 +13,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.ai.provider import DeterministicRuleFallbackPlanner  # noqa: E402
-from app.engines.catalog import get_default_catalog, get_resources_for_stage  # noqa: E402
 from app.engines.validator import TRACK_SUBJECT_ALLOWLIST, DeterministicValidator  # noqa: E402
 from app.schemas.planning import IntakeSlots  # noqa: E402
+from tests.synthetic_catalog import get_default_catalog, get_resources_for_stage  # noqa: E402
 
 DEFAULT_DATASET = Path(__file__).resolve().parents[1] / "tests/fixtures/offline_plans.json"
 
@@ -33,9 +33,7 @@ def evaluate(dataset_path: Path = DEFAULT_DATASET) -> dict:
     for case in cases:
         intake = IntakeSlots(**case["intake"])
         stage_resources = get_resources_for_stage(intake.stage_code)
-        proposal = DeterministicRuleFallbackPlanner.generate_fallback_plan(
-            intake, stage_resources
-        )
+        proposal = DeterministicRuleFallbackPlanner.generate_fallback_plan(intake, stage_resources)
         items = proposal.get("items", [])
         is_generated = len(items) > 0
         scenario_type = case.get(
@@ -59,9 +57,7 @@ def evaluate(dataset_path: Path = DEFAULT_DATASET) -> dict:
             selected = [catalog[item.resource_version_id] for item in validated_plan.items]
             covered_subjects = {meta.subject for meta in selected} & set(intake.weak_subjects)
             coverage = (
-                len(covered_subjects) / len(intake.weak_subjects)
-                if intake.weak_subjects
-                else 1.0
+                len(covered_subjects) / len(intake.weak_subjects) if intake.weak_subjects else 1.0
             )
             total_duration = sum(item.duration_minutes for item in validated_plan.items)
 

@@ -25,7 +25,11 @@ from app.engines.catalog import get_resources_for_stage
 from app.engines.validator import DeterministicValidationError, DeterministicValidator
 from app.modules.consultation.auth import require_student_access
 from app.modules.consultation.repository import ConsultationRepository
-from app.modules.consultation.service import ConsultationService
+from app.modules.consultation.service import (
+    ConsultationService,
+    TrustedContentUnavailable,
+    trusted_plan_view,
+)
 from app.schemas.planning import GradeCode, IntakeSlots, StageCode, TrackCode, Weekday
 
 router = APIRouter(tags=["consultation"])
@@ -112,6 +116,16 @@ def get_active_study_plan(
                 "message": "No active study plan found.",
             }
 
+        plan = trusted_plan_view(conn, plan)
+        if plan is None:
+            return {
+                "status": "awaiting_content",
+                "student_id": str(student_id),
+                "plan": None,
+                "citations": [],
+                "message": "Some plan resources are no longer approved or licensed.",
+            }
+        plan.pop("raw_proposal", None)
         total_duration = sum(it.get("duration_minutes", 0) for it in plan.get("items", []))
         return {
             "status": "active",
@@ -144,7 +158,7 @@ async def submit_daily_progress(
             hashlib.sha256(body.model_dump_json().encode()).hexdigest(),
         )
         if cached is not None:
-            return cached
+            return service.trusted_student_result(conn, student_id, cached)
         # Entitlement Gating Check (FR-S1 / Phase 5)
         if ConsultationRepository.is_feature_enabled(conn, "enforce_subscription_entitlements"):
             if not ConsultationRepository.check_student_entitlement(
@@ -236,7 +250,7 @@ async def initialize_web_intake(
             hashlib.sha256(req.model_dump_json().encode()).hexdigest(),
         )
         if cached is not None:
-            return cached
+            return service.trusted_student_result(conn, student_id, cached)
         # Entitlement check
         if ConsultationRepository.is_feature_enabled(conn, "enforce_subscription_entitlements"):
             if not ConsultationRepository.check_student_entitlement(
@@ -266,25 +280,50 @@ async def initialize_web_intake(
         ConsultationRepository.update_intake_session(
             conn,
             session_id=session["id"],
+            student_id=student_id,
             current_step="completed",
             slots=intake.model_dump(),
             is_completed=True,
         )
 
-        resources = get_resources_for_stage(req.stage_code)
+        result: dict[str, Any]
+        resources = get_resources_for_stage(
+            req.stage_code, conn, grade=intake.grade, track=intake.track
+        )
         if not DeterministicRuleFallbackPlanner.generate_fallback_plan(intake, resources)["items"]:
-            detail = "No trusted resources fit the supplied intake and daily capacity."
-            ConsultationRepository.finish_request(
-                conn, student_id, request_key, {"_error_detail": detail}
-            )
+            result = {
+                "status": "awaiting_content",
+                "student_id": str(student_id),
+                "plan": None,
+                "citations": [],
+                "response_text": (
+                    "No approved, published resources fit this intake. Your intake is saved."
+                ),
+            }
+            ConsultationRepository.finish_request(conn, student_id, request_key, result)
             conn.commit()
-            raise HTTPException(422, detail)
+            return result
         proposal = await service.ai_provider.propose_study_plan(intake, resources)
 
-        validated_plan, proposal = await service.validate_or_repair(
-            proposal, intake, resources, student_id, next_rev
-        )
+        try:
+            validated_plan, proposal = await service.validate_or_repair(
+                proposal, intake, resources, student_id, next_rev, conn=conn
+            )
+        except TrustedContentUnavailable:
+            result = {
+                "status": "awaiting_content",
+                "student_id": str(student_id),
+                "plan": None,
+                "citations": [],
+                "response_text": "Approved content is currently unavailable. Your intake is saved.",
+            }
+            ConsultationRepository.finish_request(conn, student_id, request_key, result)
+            conn.commit()
+            return result
 
+        resources = get_resources_for_stage(
+            intake.stage_code, conn, grade=intake.grade, track=intake.track
+        )
         items_data = [item.model_dump() for item in validated_plan.items]
         ConsultationRepository.save_study_plan(
             conn=conn,
@@ -311,11 +350,15 @@ async def initialize_web_intake(
                 "revision_no": next_rev,
                 "source": "web_portal",
                 "telegram_chat_id": ConsultationRepository.get_telegram_chat_id(conn, student_id),
-                "message_text": service._format_study_plan_message(validated_plan, intake),
+                "message_text": service._format_study_plan_message(
+                    validated_plan, intake, resources
+                ),
             },
         )
 
         plan = ConsultationRepository.get_active_study_plan(conn, student_id)
+        if plan:
+            plan.pop("raw_proposal", None)
         result = {
             "status": "plan_generated",
             "student_id": str(student_id),

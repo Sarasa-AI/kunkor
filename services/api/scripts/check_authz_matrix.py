@@ -3,69 +3,14 @@
 Authz Matrix & Deny-by-default Checker.
 Inspects FastAPI routes in app.main. Every route must either:
 1. Be explicitly registered in the public bypass whitelist (e.g., /healthz), OR
-2. Have explicit Action authorization dependency / attribute.
+2. Have an explicit authorization dependency.
 Fails with non-zero exit code if any unregistered route lacks authz.
 """
 
 import sys
 
+from app.core.authz import has_valid_authz, is_public_route, iter_routes
 from app.main import app
-
-PUBLIC_WHITELIST = {
-    "/healthz",
-    "/docs",
-    "/docs/oauth2-redirect",
-    "/openapi.json",
-    "/redoc",
-}
-
-
-AUTHZ_DEPENDENCY_NAMES = {
-    "require_auth",
-    "require_permission",
-    "require_student_access",
-    "verify_auth",
-    "check_authz",
-    "AuthzGuard",
-}
-
-
-def is_authz_dependency(dep: object) -> bool:
-    call = getattr(dep, "call", dep)
-    if getattr(call, "__authz_enforcing__", False):
-        return True
-    name = getattr(call, "__name__", "") or getattr(call.__class__, "__name__", "")
-    return name in AUTHZ_DEPENDENCY_NAMES
-
-
-def has_valid_authz(route: object) -> bool:
-    endpoint = getattr(route, "endpoint", None)
-    has_marker = getattr(endpoint, "__authz_required__", False) or bool(
-        getattr(endpoint, "__authz_policy__", None)
-    )
-    if has_marker:
-        return True
-
-    route_deps = getattr(route, "dependencies", []) or []
-    if any(is_authz_dependency(d) for d in route_deps):
-        return True
-
-    dependant = getattr(route, "dependant", None)
-    if dependant and hasattr(dependant, "dependencies"):
-        if any(is_authz_dependency(d) for d in dependant.dependencies):
-            return True
-
-    return False
-
-
-def iter_routes(routes):
-    """Include FastAPI's lazy router contexts with effective prefixes/dependencies."""
-    for route in routes:
-        contexts = getattr(route, "effective_route_contexts", None)
-        if contexts is not None:
-            yield from contexts()
-        else:
-            yield route
 
 
 def check_authz() -> int:
@@ -79,7 +24,7 @@ def check_authz() -> int:
             continue
         total_routes += 1
 
-        if path in PUBLIC_WHITELIST:
+        if is_public_route(route):
             continue
 
         if not has_valid_authz(route):

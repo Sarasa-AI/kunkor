@@ -1,126 +1,38 @@
-# R01 — Remote CI Verification Report
+# R01 CI Verification
 
-Current verification (2026-11-01): committed HEAD `6c49c8b86efbd2fd83864e47fb30cd78439b6649` passed [run 41267511951](https://github.com/Sarasa-AI/kunkor/actions/runs/41267511951). Live read-only GitHub metadata and logs verified all three jobs: 95 tests passed, 1 warning; Ruff clean; Mypy 25 files; migrations 0001–0003 up/down/up; import/authz checks clean. This excludes current uncommitted corrective work. The sections below describe historical runs.
+- **VERIFIED** checkout `/Users/sarasa/kunkor`, branch `main`, HEAD `84acb5fe1abde4210ac15b3024dd2da6c34ec83b`. `git rev-list --left-right --count HEAD...origin/main` returned `0 0` against the local tracking ref.
+- **VERIFIED** initial `git status --short --branch` began `## main...origin/main`. `git status --porcelain=v1 --untracked-files=all` counted 39 unstaged modifications, 48 unstaged deletions, 477 untracked files, zero staged changes. All local checks evaluated working-tree source, including untracked inputs.
+- **PENDING** remote GitHub Actions on the audited changes. `.github/workflows/ci.yml:3` runs on push or pull request to `main`. This report records local results only.
 
-Scope limits: secret job checks two literal patterns, excludes Markdown and `.github`, runs no dependency scanner. Authz matrix checks declared markers/dependencies, not runtime authorization. Schema round-trips do not prove backup/restore or business data preservation. No live Telegram/provider delivery was tested.
+## Local results
 
-## 1. Executive Summary
+| Status | Command | Output or observation |
+| --- | --- | --- |
+| VERIFIED | `docker exec <audit-container> psql -U kunkor -d kunkor_stage0_test -Atc 'SHOW server_version'` | `16.15`. Fresh container from cached `postgres:16-alpine`, random port bound to loopback. |
+| VERIFIED | `make migrate` | All 11 SQL migrations applied. Last output included `Applied 0011_empty_to_grow_catalog successfully`. |
+| VERIFIED | `make test VENV="$PWD/services/api/.venv" PYTEST="$PWD/services/api/.venv/bin/python -m pytest"` | `373 passed, 2 warnings in 16.75s`, including the backup/restore integration test. |
+| VERIFIED | `make migrate-check VENV="$PWD/services/api/.venv"` | `Step 1 (Forward): Applied 11 migrations.` `Step 2 (Backward): Rolled back 11 migrations.` `Step 3 (Re-apply): Successfully applied 11 migrations.` |
+| VERIFIED | `cd services/api && .venv/bin/python -m ruff check .` | `All checks passed!` |
+| VERIFIED | `cd services/api && .venv/bin/python -m mypy app` | `Success: no issues found in 43 source files`. |
+| VERIFIED | `cd services/api && .venv/bin/python -m pip --disable-pip-version-check check` | `No broken requirements found.` |
+| VERIFIED | `make import-check authz-matrix VENV="$PWD/services/api/.venv"` | `Modular boundary check passed (0 violations).` `Evaluated 47 routes.` `100% of routes meet authorization criteria.` |
+| VERIFIED | `npm ci --offline --no-audit --no-fund` | Isolated web copy with repository lockfile, `added 337 packages in 2s`. |
+| VERIFIED | `npm run lint` / `npm run typecheck` | `No ESLint warnings or errors`; TypeScript exited 0. |
+| VERIFIED | `npm run test:healthz` / `npm run test:content` | 12 and 8 passed, respectively. |
+| VERIFIED | `npm run build` / `npm run test:healthz:runtime` | `Compiled successfully`; production Next process with synthetic upstream, `1 passed`. |
+| VERIFIED | `npm run test:contexts` | 2 passed with Docker available. These tests are additional to the workflow. |
+| VERIFIED | Extract the secret-scan shell block from `.github/workflows/ci.yml:110`, then run via `bash -e -c` on a temporary Git index with a synthetic fixture. | Original script returned 0 with only the first marker present. Patched script returned `clean: exit=0`, `first: exit=1`, `second: exit=1`. |
 
-- **Task ID:** R01
-- **Status:** **VERIFIED**
-- **Evaluation Date:** 2026-10-31 / 2026-11-01
-- **Verified Commit SHA:** `a733c23809684889554587ff479a0ac774b3b37e`
-- **Branch:** `main`
-- **GitHub Actions Run ID:** `41260318410`
-- **Workflow Run URL:** https://github.com/Sarasa-AI/kunkor/actions/runs/41260318410
-- **Workflow Conclusion:** `success`
-- **Execution Timestamp:** `2026-11-01T01:15:26Z`
+API ran on Python 3.11.14. Web ran on Node 22.23.5/npm 10.9.9 with Next 15.5.28. The CI workflow specifies Node 20. The web checks ran in a temporary copy to keep generated files outside the checkout. The existing workspace dependency tree lacked its native SWC binary. An offline lockfile install in the temporary copy restored it.
 
----
+The database commands used explicit `DATABASE_URL` and `TEST_DATABASE_URL` pointing to the same disposable database, exported test CORS origins, and disabled real provider and Telegram delivery. `DOCKER_PG_CONTAINER` pointed at that container for version-matched `pg_dump`/`pg_restore`. Before the CORS override, dotenv changed the test app's origin allowlist and two assertions failed (`tests/test_security_remediation.py:70`, `tests/test_web_consultation_endpoints.py:378`, paths relative to `services/api`). The CI-style origins restored both checks without changing application CORS behavior. Relocated venv launchers had stale shebangs, so Python modules were invoked via the working interpreter.
 
-## 2. Remote GitHub Actions Job Results
+The workflow patch makes either blocked pattern fail the job and omits matching text from logs. It is a scoped CI check. Full history-scanner coverage is tracked under SEC-04. `git diff --check -- .github/workflows/ci.yml` passed. The full-tree check showed four pre-existing Markdown trailing-space warnings at `docs/PHASE_1_REPORT.md:9`, `docs/PHASE_1_REPORT.md:10`, `docs/PHASE_2_REPORT.md:5`, and `docs/PHASE_3_REPORT.md:5`.
 
-| Job Name | Job ID | Duration | Status | Key Outputs |
-|---|---|---|---|---|
-| `API (Lint, Typecheck, Test, Authz)` | `124712046185` | 35s | **SUCCESS** | PostgreSQL 16 service initialized; 9 tests passed; Ruff & Mypy clean; migration round-trip verified; import boundaries and authz matrix 100% passed. |
-| `Web (Lint, Typecheck)` | `124712046139` | 51s | **SUCCESS** | `npm ci` clean; ESLint clean (0 errors); TypeScript `tsc --noEmit` clean (0 errors). |
-| `Secret & Dependency Scan` | `124712046009` | 5s | **SUCCESS** | Scanned codebase excluding `.github`, `node_modules`, and documentation; 0 leaked secrets found. |
+## Stage 0 rerun
 
----
+**VERIFIED** after the targeted fixes, the same `make test migrate-check` commands returned `378 passed, 2 warnings in 16.74s` and `SUCCESS: Migration integrity and reversibility checks passed.` Ruff passed. Mypy returned `Success: no issues found in 44 source files`. Import and authorization matrix checks passed, with 47 routes evaluated. The isolated web lint, typecheck, 12 health tests, 8 content tests, build and 1 production runtime test passed again. Remote GitHub Actions remains **PENDING**.
 
-## 3. Step-by-Step Evidence (Job: `API (Lint, Typecheck, Test, Authz)`)
+**VERIFIED** after supervisor remediation, the same API commands returned `379 passed, 2 warnings in 17.72s` and `SUCCESS: Migration integrity and reversibility checks passed.` Ruff, Mypy, dependency consistency, import boundaries and the 47-route authorization matrix passed. The web inputs are unchanged from the verified build.
 
-1. **PostgreSQL 16 Service Healthcheck**:
-   - Container: `postgres:16-alpine`
-   - Healthcheck: `pg_isready -h 127.0.0.1 -U kunkor -d kunkor_test`
-   - Status: Healthy prior to executing test steps.
-2. **API Lint (Ruff)**:
-   - Command: `cd services/api && ruff check .`
-   - Exit code: `0` (All checks passed)
-3. **API Typecheck (Mypy)**:
-   - Command: `cd services/api && mypy app`
-   - Exit code: `0` (Success: no issues found in 11 source files)
-4. **Test Database Migration**:
-   - Command: `make migrate DATABASE_URL="$TEST_DATABASE_URL"`
-   - Exit code: `0` (Migration `0001_baseline_schema` applied successfully)
-5. **API Test Suite (Pytest)**:
-   - Command: `make test`
-   - Exit code: `0`
-   - Result: 9 passed in 0.35s
-     - `tests/test_healthz.py` (1 passed)
-     - `tests/test_append_only.py` (3 passed)
-     - `tests/test_idempotency_and_flags.py` (2 passed)
-     - `tests/test_migrations.py` (2 passed: includes isolation guard and round-trip)
-     - `tests/test_outbox_worker.py` (1 passed)
-6. **Migration Conventions and Reversibility**:
-   - Command: `make migrate-check`
-   - Exit code: `0`
-   - Steps: Forward apply -> Backward rollback -> Re-apply forward (disposable schema rollback and recreation only; down migrations delete data).
-7. **Modular Boundary Import Check**:
-   - Command: `make import-check`
-   - Exit code: `0` (0 violations)
-8. **Authorization Matrix Verification**:
-   - Command: `make authz-matrix`
-   - Exit code: `0` (100% of routes meet authorization criteria)
-
----
-
-## 4. Step-by-Step Evidence (Job: `Web (Lint, Typecheck)`)
-
-1. **Dependency Installation**:
-   - Command: `npm ci || npm install`
-   - Exit code: `0`
-2. **Web Lint**:
-   - Command: `npm run lint`
-   - Exit code: `0` (No ESLint warnings or errors)
-3. **Web Typecheck**:
-   - Command: `npm run typecheck`
-   - Exit code: `0` (`tsc --noEmit` clean)
-
----
-
-## 5. Failure History & Resolution
-
-1. **Run 41260182760 (Initial Push)**:
-   - Commit: `41715ab3f0211d760bd9f11c37c25c4181b5fc0e`
-   - Conclusion: `failure` (Job `Secret & Dependency Scan` failed).
-   - Root Cause: In `.github/workflows/ci.yml`, the literal grep command `! grep -rn "PRIVATE KEY" --exclude-dir={.git,node_modules} .` matched the search string inside `ci.yml` itself and markdown audit records (`AUDIT_05_SECURITY_OPERATIONS.md`), producing a false-positive violation.
-   - Resolution: Updated secret scanner to exclude `.github` and markdown documentation (`--exclude-dir={.git,node_modules,.github} --exclude="*.md"`).
-   - Retest Commit: `a733c23809684889554587ff479a0ac774b3b37e`
-   - Retest Run: `41260318410` -> **SUCCESS** across all 3 jobs.
-
----
-
-## 6. Acceptance Criteria Verification
-
-- [x] Python 3.11 setup verified.
-- [x] Dependency installation verified.
-- [x] Ruff lint verified.
-- [x] Mypy typecheck verified.
-- [x] Python import boundary check verified.
-- [x] Authorization matrix check verified.
-- [x] PostgreSQL 16 service container verified with healthcheck.
-- [x] Test database schema migration verified.
-- [x] Migration integrity and up/down/up round-trip verified.
-- [x] Destructive migration checks guarded against non-disposable databases (`require_test_database`).
-- [x] Web lint (`next lint`) verified.
-- [x] TypeScript checks (`tsc --noEmit`) verified.
-- [x] Remote GitHub Actions workflow run verified green (`success`).
-
-**R01 is certified VERIFIED.**
-
----
-
-## 7. Subsequent Verified Workflow Runs
-
-### Run 41261067230 (Stage 0 Baseline & TASK-03)
-
-- **Run ID:** `41261067230`
-- **Commit SHA:** `b22e4c02c58330bffd8fdf7972533dccc70b16dc`
-- **Branch:** `main`
-- **Workflow Run URL:** https://github.com/Sarasa-AI/kunkor/actions/runs/41261067230
-- **Workflow Conclusion:** `success`
-- **Jobs:**
-  - `API (Lint, Typecheck, Test, Authz)` (Job ID: `124714258380`): `success`
-  - `Secret & Dependency Scan` (Job ID: `124714258389`): `success`
-  - `Web (Lint, Typecheck)` (Job ID: `124714258420`): `success`
+**VERIFIED** on 2026-11-19, `git checkout-index -a` materialized the scoped commit candidate in a clean directory. The PostgreSQL 16.15 run returned `379 passed, 2 warnings in 16.00s`, all 11 migration round-trips passed, and the import and 47-route policy checks passed. Ruff and Mypy passed. Locked web installation and all workflow web commands passed on Node 22, plus both Docker-context tests. The candidate includes inherited runtime dependencies and excludes unrelated documentation deletions, local configuration, and evidence archives.

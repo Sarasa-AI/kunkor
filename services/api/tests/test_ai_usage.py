@@ -7,11 +7,18 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.ai import usage
 from app.ai.provider import NineRouterProvider
+from app.core import ai_usage as usage
 from app.core.config import Settings, settings
 from app.core.db import get_db_connection
 from app.schemas.planning import IntakeSlots
+from tests.synthetic_catalog import get_resources_for_stage
+
+
+@pytest.fixture(autouse=True)
+def synthetic_enabled_provider(monkeypatch):
+    monkeypatch.setattr(settings, "NINEROUTER_ENABLED", True)
+    monkeypatch.setattr(settings, "NINEROUTER_API_KEY", "synthetic-provider-key")
 
 
 def test_unpriced_or_unbound_usage_never_opens_database(monkeypatch):
@@ -59,7 +66,9 @@ async def test_every_http_retry_requires_reservation():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = NineRouterProvider(client=client, usage_reserver=reserve)
         provider.bind_student(student)
-        result = await provider.propose_study_plan(intake, [])
+        result = await provider.propose_study_plan(
+            intake, get_resources_for_stage(intake.stage_code, grade=intake.grade)
+        )
     assert reservations == [student, student]
     assert len(calls) == 1
     assert result["source"] == "deterministic_fallback_planner"
@@ -77,7 +86,9 @@ async def test_reservation_failure_prevents_http():
     intake = IntakeSlots(stage_code="konkur", grade="G12", daily_study_capacity_minutes=60)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = NineRouterProvider(client=client, usage_reserver=broken_reservation)
-        result = await provider.propose_study_plan(intake, [])
+        result = await provider.propose_study_plan(
+            intake, get_resources_for_stage(intake.stage_code, grade=intake.grade)
+        )
     assert result["source"] == "deterministic_fallback_planner"
 
 

@@ -1,4 +1,5 @@
 import os
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -196,3 +197,101 @@ def test_telegram_httpx_logs_redact_bot_token(monkeypatch, caplog):
     assert "HTTP Request" in caplog.text
     assert "[REDACTED]" in caplog.text
     assert "synthetic-secret-token" not in caplog.text
+
+
+@pytest.mark.parametrize("http_status,retries", [(400, 5), (403, 5), (429, 1), (500, 1)])
+def test_telegram_rejection_classification(monkeypatch, caplog, http_status, retries):
+    import httpx
+
+    from app.core.config import settings
+    from app.workers import telegram
+
+    monkeypatch.setattr(settings, "TELEGRAM_DELIVERY_ENABLED", True)
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "synthetic-token")
+    marker = "synthetic-private-rejection-body"
+
+    def reject(url, **kwargs):
+        return httpx.Response(http_status, text=marker, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(telegram.httpx, "post", reject)
+    with psycopg.connect(TEST_DB_URL) as conn:
+        event_id = conn.execute(
+            "INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload) "
+            "VALUES ('TELEGRAM_MESSAGE_REQUESTED', 'test', 'reject', %s::jsonb) RETURNING id",
+            ('{"telegram_chat_id":123,"message_text":"synthetic"}',),
+        ).fetchone()[0]
+
+    assert process_pending_outbox_events(test=True) == 0
+    with psycopg.connect(TEST_DB_URL) as conn:
+        row = conn.execute(
+            "SELECT processed_at, retry_count, next_attempt_at > NOW(), last_error "
+            "FROM outbox_events WHERE id = %s",
+            (event_id,),
+        ).fetchone()
+    classification = "PermanentDeliveryError" if retries == 5 else "RuntimeError"
+    assert row == (None, retries, True, classification)
+    assert marker not in caplog.text
+
+
+def test_locked_event_is_skipped_and_recovered_after_rollback(monkeypatch, caplog):
+    monkeypatch.setenv("PGOPTIONS", "-c lock_timeout=1000")
+    marker = "synthetic-private-aggregate"
+    with psycopg.connect(TEST_DB_URL) as conn:
+        first, second = conn.execute(
+            "INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload) "
+            "VALUES ('test.event', 'test', %s, '{}'), ('test.event', 'test', 'other', '{}') "
+            "RETURNING id",
+            (marker,),
+        ).fetchall()
+
+    with psycopg.connect(TEST_DB_URL) as interrupted_worker:
+        interrupted_worker.execute("SELECT id FROM outbox_events WHERE id = %s FOR UPDATE", first)
+        with caplog.at_level("INFO", logger="outbox-worker"):
+            assert process_pending_outbox_events(test=True) == 1
+        assert interrupted_worker.execute(
+            "SELECT processed_at IS NOT NULL FROM outbox_events WHERE id = %s", second
+        ).fetchone() == (True,)
+        interrupted_worker.rollback()
+    with caplog.at_level("INFO", logger="outbox-worker"):
+        assert process_pending_outbox_events(test=True) == 1
+        assert process_pending_outbox_events(test=True) == 0
+    assert marker not in caplog.text
+
+
+def test_worker_defers_student_lock_conflict_without_consuming_retry():
+    chat_id = uuid4().int % (2**62) + 1
+    with psycopg.connect(TEST_DB_URL) as conn:
+        student_id = conn.execute(
+            "INSERT INTO students (telegram_chat_id, telegram_user_id) VALUES (%s, %s) "
+            "RETURNING id",
+            (chat_id, chat_id),
+        ).fetchone()[0]
+        event_id = conn.execute(
+            "INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload, "
+            "student_id, retry_count) "
+            "VALUES ('STUDY_PLAN_DELIVERY_REQUESTED', 'study_plan', %s, '{}', %s, 4) RETURNING id",
+            (str(uuid4()), student_id),
+        ).fetchone()[0]
+
+    with psycopg.connect(TEST_DB_URL) as erasure:
+        erasure.execute("SELECT id FROM students WHERE id = %s FOR UPDATE", (student_id,))
+        assert process_pending_outbox_events(test=True) == 0
+        assert erasure.execute(
+            "SELECT retry_count, processed_at, next_attempt_at > NOW() "
+            "FROM outbox_events WHERE id = %s",
+            (event_id,),
+        ).fetchone() == (4, None, True)
+        erasure.execute("DELETE FROM outbox_events WHERE student_id = %s", (student_id,))
+        erasure.rollback()
+        erasure.execute(
+            "UPDATE outbox_events SET next_attempt_at = NOW() WHERE id = %s", (event_id,)
+        )
+
+    assert process_pending_outbox_events(test=True) == 1
+    with psycopg.connect(TEST_DB_URL) as conn:
+        assert conn.execute(
+            "SELECT retry_count, processed_at IS NOT NULL FROM outbox_events WHERE id = %s",
+            (event_id,),
+        ).fetchone() == (4, True)
+        conn.execute("DELETE FROM outbox_events WHERE id = %s", (event_id,))
+        conn.execute("DELETE FROM students WHERE id = %s", (student_id,))

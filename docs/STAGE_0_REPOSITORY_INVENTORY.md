@@ -1,228 +1,38 @@
-> Historical Stage 0 snapshot. Current HEAD 6c49c8b adds consultation/progress and admin routers, migrations 0002/0003, planning validator/provider, resource catalogue and operations. The endpoint/table lists below are not a current complete inventory. Current corrective work remains uncommitted and under verification. External AI and Telegram delivery default disabled; admin credentials must be explicitly configured. Worker log output is not proof of actual Telegram delivery.
+# Stage 0 Repository Inventory
 
-# Kunkor — Stage 0 Repository Inventory
+**VERIFIED** checkout `/Users/sarasa/kunkor`, branch `main`, HEAD `84acb5fe1abde4210ac15b3024dd2da6c34ec83b`. Initial `git status --short --branch` showed `## main...origin/main` with a dirty worktree. The inventory covers code on disk. The R01 report records the initial porcelain counts.
 
-## 1. Overview & Repository Topology
+## 1. FastAPI routes
 
-- **Repository Root:** `/Users/sarasa/Documents/kunkor`
-- **Architecture Pattern:** Modular Monolith (ADR-0001)
-- **Primary Languages & Runtimes:** Python 3.11+ (FastAPI), TypeScript / Node.js 20+ (Next.js 15), PostgreSQL 16
-- **Workspace Structure:**
-  - `services/api/`: Backend service (FastAPI, database migrations, worker processes, verification scripts)
-  - `apps/web/`: Frontend presentation application (Next.js 15 App Router, Persian RTL)
-  - `packages/contracts/`: Shared schemas and contracts root
-  - `docs/`: Architecture Decision Records (`docs/adr/`), decisions log (`docs/decisions.md`), execution baselines, task specifications, and acceptance scenario books (`docs/test-scenarios/`)
-  - `.github/workflows/`: Continuous integration pipeline (`ci.yml`)
+- **VERIFIED** `services/api/app/main.py:15` creates the app and mounts consultation, catalog, owner catalog, student identity, and operations routers at lines 24–28. `make authz-matrix` evaluated 47 routes. Five paths are explicitly public in `services/api/app/core/authz.py:9`, including health and generated documentation routes.
+- **VERIFIED** `services/api/app/modules/consultation/router.py:86` registers the Telegram webhook. Lines 102, 139, 215, 231, and 374 register plan, progress, history, intake, and identity routes with compatibility aliases.
+- **VERIFIED** `services/api/app/modules/content/router.py:177` through the unit routes starting at line 255 serve published catalog reads. `services/api/app/modules/content/admin_router.py:45` through line 122 implements owner-only book and unit management, lifecycle transitions, and audit reads.
+- **VERIFIED** `services/api/app/modules/identity/router.py:45` provides profile reads, updates, and context. `services/api/app/modules/operations/router.py:42` through line 148 exposes outbox operations, student/plan/progress inspection, flags, entitlements, and audit logs.
 
----
+## 2. Persistence and models
 
-## 2. Component Inventory
+- **REFUTED** ORM layer. The runtime uses `psycopg` connections in `services/api/app/core/db.py:26` and parameterized SQL in consultation, content, identity, and operations `repository.py` files. `services/api/app/modules/content/models.py` contains catalog domain data structures. Pydantic request/response and planning models include `services/api/app/schemas/planning.py:44` and `services/api/app/modules/identity/router.py:20`.
+- **VERIFIED** SQL persistence for audit/outbox/idempotency/flags/entitlements (`services/api/migrations/0001_baseline_schema.up.sql:17`), students/intake/plans (`services/api/migrations/0002_students_and_consultation.up.sql:4`), progress (`services/api/migrations/0003_daily_progress_and_revisions.up.sql:4`), AI usage (`services/api/migrations/0005_ai_usage.up.sql:3`), and catalog/audit (`services/api/migrations/0008_content_catalog.up.sql:6`, `services/api/migrations/0011_empty_to_grow_catalog.up.sql:119`).
 
-### 2.1 Backend Application (`services/api`)
+## 3. Migrations
 
-- **Entry Point:** `services/api/app/main.py`
-  - Instantiates `FastAPI(title="Kunkor Educational Platform API", version="0.1.0")`
-  - Enforces whitelisted CORS origin headers via `CORSMiddleware` (SEC-01)
-  - Registers system health endpoint `/healthz`
-- **Configuration Engine:** `services/api/app/core/config.py`
-  - Pydantic-based `Settings(BaseSettings)`
-  - Environment attributes: `ENVIRONMENT`, `DATABASE_URL`, `TEST_DATABASE_URL`, `APP_PORT`, `CORS_ALLOWED_ORIGINS`
-  - Model validator `validate_environment_and_credentials()` enforcing fail-fast termination in production if `DATABASE_URL` is missing or uses `kunkor_dev_password` (SEC-02)
-  - Origin parser parsing comma-separated and JSON list representations, strictly stripping wildcard `*` when credentials are active
-- **Database Connection Layer:** `services/api/app/core/db.py`
-  - Context manager `get_db_connection(test: bool = False)` wrapping `psycopg.connect()`
-  - Explicit row factories (`psycopg.rows.dict_row`)
-  - Dual targeting for application vs. test databases
-- **Worker Processes:**
-  - `services/api/app/workers/outbox_worker.py`: Polling worker consuming `outbox_events` using `FOR UPDATE SKIP LOCKED`. Hardened with `MAX_RETRIES = 5`, per-event transaction isolation, and dead-letter classification (WK-01..04).
-  - `services/api/app/workers/placeholder_worker.py`: Service stub for background task execution.
-- **Verification Scripts:**
-  - `services/api/scripts/migrate.py`: Direct migration runner executing SQL migration files in forward order.
-  - `services/api/scripts/migrate_check.py`: Verification harness testing forward, backward rollback, and re-application reversibility. Guarded by `require_test_database()` (DB-04).
-  - `services/api/scripts/check_authz_matrix.py`: AST and route dependency inspector enforcing authorization policies (SEC-05).
-  - `services/api/scripts/check_imports.py`: Modular boundary enforcement ensuring strict unidirectional module dependencies.
-  - `services/api/scripts/seed_dev.py`: Development seed data generator.
+- **REFUTED** Alembic implementation. `rg --files -g '*alembic*'` yielded no project files. `services/api/requirements.txt` declares psycopg. `Makefile:34` and `Makefile:37` use the custom `services/api/scripts/migrate.py` and `services/api/scripts/migrate_check.py` runner for paired SQL.
+- **VERIFIED** 11 up/down pairs under `services/api/migrations/`, including existing 0001–0006 and working-tree 0007–0011. The latter cover student profile, versioned catalog, identity isolation, profile constraint round-trip, and catalog operations. R01 exercised all 11 forward/backward/reapply on PostgreSQL 16.15.
 
-### 2.2 Frontend Application (`apps/web`)
+## 4. Authentication and authorization
 
-- **Framework:** Next.js 15.5.28 with React 19 / TypeScript
-- **Styling & Localization:** Tailwind CSS with native right-to-left Persian font stack (`Vazirmatn`) and RTL layout (`apps/web/src/app/layout.tsx`)
-- **Landing Smoke Component:** `apps/web/src/app/page.tsx`
-  - Queries `/healthz` on FastAPI API service
-  - Renders Iranian educational platform branding and operational connectivity status
-- **Supply Chain Hardening:** Package lockfile enforced with overrides for `glob` (`^10.5.0`) and `postcss` (`^8.5.32`), achieving zero high/critical CVEs (SEC-03).
+- **VERIFIED** auth dependencies exist in `services/api/app/modules/consultation/auth.py`, `services/api/app/modules/identity/auth.py:16`, and `services/api/app/modules/operations/auth.py`. These cover signed student identities, student context, admin/owner scope, and authenticated catalog access. The Telegram webhook dependency is at `services/api/app/modules/consultation/router.py:38`. The policy shared by startup and CI lives at `services/api/app/core/authz.py:22`.
+- **VERIFIED** ADR-3's centralized runtime authorization requirement and ADR-8's denormalized student ownership design are documented in `HEAD:docs/adr/0003-centralized-backend-authz.md:11` and `HEAD:docs/adr/0008-denormalized-student-id.md:11`. Both paths were deleted in the input worktree. The audit report records enforcement separately from the decisions.
 
----
+## 5. Worker and outbox
 
-## 3. Route & Endpoint Inventory
+- **VERIFIED** `services/api/app/workers/outbox_worker.py` processes PostgreSQL outbox events and runs polling. `services/api/app/workers/telegram.py` supplies the delivery adapter. Despite its filename, the Compose entry point at `docker-compose.yml:60` delegates to the real worker loop via `services/api/app/workers/placeholder_worker.py:8`.
 
-The application currently exposes the following HTTP endpoints (all validated by `check_authz_matrix.py`):
+## 6. Tests
 
-| Method | Path | Summary / Tag | Authz Policy | Whitelist Rationale |
-|---|---|---|---|---|
-| `GET` | `/healthz` | System liveness probe | Public | Unauthenticated orchestration probe |
-| `GET` | `/docs` | OpenAPI Swagger UI | Public | Developer documentation |
-| `GET` | `/redoc` | OpenAPI ReDoc UI | Public | Developer documentation |
-| `GET` | `/openapi.json` | OpenAPI JSON Schema | Public | API contract distribution |
-| `GET` | `/docs/oauth2-redirect` | Swagger OAuth2 redirect | Public | OpenAPI documentation helper |
+- **VERIFIED** `services/api/pyproject.toml:18` points pytest at `services/api/tests/`. `services/api/tests/conftest.py:14` provisions schema through the SQL runner. The 373-item R01 run and 379-item final Stage 0 run covered routing, policy, signed identity, cross-student access, migration/backup, worker/outbox, catalog and consultation integration. Web contract/runtime tests live in `apps/web/tests/`.
 
-*Note: No unprotected business or student endpoints exist. All future student-facing routes require explicit `__authz_required__` or authz dependency enforcement per SEC-05.*
+## 7. Frontend and clients
 
----
-
-## 4. Database Schema & Tables Inventory
-
-Database migrations are located in `services/api/migrations/` and managed sequentially. Migration `0001_baseline_schema` establishes:
-
-### Extensions
-- `btree_gist`: Multi-column index acceleration and exclusion constraints
-- `uuid-ossp`: UUID generation helpers
-
-### Tables & Schema Structure
-
-1. **`audit_events`** (Section 2.3 / WP-13 / ADR-0005)
-   - **Columns:**
-     - `id`: `UUID PRIMARY KEY DEFAULT gen_random_uuid()`
-     - `actor_user_id`: `UUID` (Nullable)
-     - `student_id`: `UUID` (Indexed per ADR-0008)
-     - `action`: `VARCHAR(100) NOT NULL` (Indexed)
-     - `resource_type`: `VARCHAR(100) NOT NULL`
-     - `resource_id`: `VARCHAR(100)`
-     - `metadata`: `JSONB NOT NULL DEFAULT '{}'`
-     - `request_id`: `VARCHAR(100)`
-     - `occurred_at`: `TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-   - **Trigger Protection:** `trg_audit_events_append_only` calling `prevent_append_only_mutation()`, strictly rejecting all `UPDATE` and `DELETE` queries at database level.
-   - **Indexes:** `(student_id, occurred_at)`, `(actor_user_id, occurred_at)`, `(action, occurred_at)`.
-
-2. **`outbox_events`** (Section 2.3 / Transactional Outbox Pattern)
-   - **Columns:**
-     - `id`: `UUID PRIMARY KEY DEFAULT gen_random_uuid()`
-     - `student_id`: `UUID` (Indexed per ADR-0008)
-     - `event_type`: `VARCHAR(100) NOT NULL`
-     - `aggregate_type`: `VARCHAR(100) NOT NULL`
-     - `aggregate_id`: `VARCHAR(100) NOT NULL`
-     - `payload`: `JSONB NOT NULL DEFAULT '{}'`
-     - `occurred_at`: `TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-     - `processed_at`: `TIMESTAMPTZ` (Null until dispatched)
-     - `retry_count`: `INT NOT NULL DEFAULT 0`
-   - **Indexes:** Partial index `(occurred_at) WHERE processed_at IS NULL`, `(student_id, occurred_at)`.
-
-3. **`idempotency_keys`** (Section 2.3)
-   - **Columns:**
-     - `id`: `UUID PRIMARY KEY DEFAULT gen_random_uuid()`
-     - `student_id`: `UUID`
-     - `key`: `VARCHAR(255) NOT NULL`
-     - `request_hash`: `VARCHAR(64) NOT NULL`
-     - `response_code`: `INT`
-     - `response_body`: `JSONB`
-     - `created_at`: `TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-     - `locked_until`: `TIMESTAMPTZ`
-   - **Indexes:** Unique index `(key, COALESCE(student_id, '00000000-0000-0000-0000-000000000000'::uuid))`.
-
-4. **`feature_flags`** (Section 2.3)
-   - **Columns:**
-     - `id`: `UUID PRIMARY KEY DEFAULT gen_random_uuid()`
-     - `name`: `VARCHAR(100) NOT NULL UNIQUE`
-     - `description`: `TEXT`
-     - `is_enabled`: `BOOLEAN NOT NULL DEFAULT FALSE`
-     - `rules`: `JSONB NOT NULL DEFAULT '{}'`
-     - `created_at`: `TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-     - `updated_at`: `TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-
-5. **`entitlements`** (FR-S1 / Section 2.3 / D-06)
-   - **Columns:**
-     - `id`: `UUID PRIMARY KEY DEFAULT gen_random_uuid()`
-     - `feature_key`: `VARCHAR(100) NOT NULL`
-     - `user_id`: `UUID` (Indexed)
-     - `student_id`: `UUID` (Indexed per ADR-0008)
-     - `is_granted`: `BOOLEAN NOT NULL DEFAULT TRUE`
-     - `valid_from`: `TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-     - `valid_to`: `TIMESTAMPTZ`
-     - `created_at`: `TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-   - **Indexes:** `(student_id, feature_key)`, `(user_id, feature_key)`.
-
----
-
-## 5. Outbox Worker Architecture & Operational Behavior
-
-- **File:** `services/api/app/workers/outbox_worker.py`
-- **Execution Model:** Continuous polling worker (`run_worker(poll_interval=2.0, once=False)`).
-- **Concurrency & Locking:**
-  - Queries pending records using `SELECT ... FROM outbox_events WHERE processed_at IS NULL AND retry_count < 5 ORDER BY occurred_at ASC LIMIT %s FOR UPDATE SKIP LOCKED`.
-  - Guarantees zero worker lock contention across parallel replicas.
-- **Fault Tolerance & Poison-Pill Handling:**
-  - Each individual event dispatch is wrapped in its own database transaction (`with conn.transaction():`).
-  - Successful dispatch updates `processed_at = NOW()`.
-  - Dispatch exceptions trigger failure logging, increment `retry_count = retry_count + 1`, and preserve other events in the batch.
-  - Events reaching `retry_count >= 5` are logged at `CRITICAL` as dead-lettered and excluded from active polling queries.
-  - The outer worker polling loop catches general `Exception`, logs details, sleeps for `poll_interval`, and resumes, preventing worker process exit on transient failures.
-
----
-
-## 6. Test Suite & Test Scenarios Inventory
-
-### 6.1 Automated Test Suite (`services/api/tests/`)
-
-- `test_healthz.py`: API status check (1 test).
-- `test_append_only.py`: Verifies immutability trigger preventing UPDATE and DELETE on `audit_events` (3 tests).
-- `test_idempotency_and_flags.py`: Verifies unique constraints and flag toggles (2 tests).
-- `test_migrations.py`: Verifies round-trip reversibility and destructive database guards (2 tests).
-- `test_outbox_worker.py`: Verifies event processing and dead-lettering after 5 retries (2 tests).
-- `test_security_remediation.py`: Verifies SEC-01 CORS origins, SEC-02 environment guards, SEC-05 authz inspector, and outbox retry counter (10 tests).
-- **Total Automated Unit/Integration Tests in Baseline:** 20 tests.
-
-### 6.2 Acceptance Test Scenario Book (`docs/test-scenarios/`)
-
-Documented per WP-06 / TASK-03 across all 5 educational stages (6 scenarios each: 3 success + 3 failure, totaling 30 scenarios):
-1. **Primary Low (`docs/test-scenarios/primary_low.md`):**
-   - `SCEN-PL-S01`: Play-based phonics learning path.
-   - `SCEN-PL-S02`: Guardian co-viewing session initiation.
-   - `SCEN-PL-S03`: Audio-first reading comprehension feedback.
-   - `SCEN-PL-F01`: Autonomous registration rejected without guardian consent (D-04).
-   - `SCEN-PL-F02`: Daily screen/study capacity overage rejected (>30 mins).
-   - `SCEN-PL-F03`: Text-heavy abstract math unit rejected.
-2. **Primary High (`docs/test-scenarios/primary_high.md`):**
-   - `SCEN-PH-S01`: Structured homework pacing.
-   - `SCEN-PH-S02`: Formative self-assessment check-in.
-   - `SCEN-PH-S03`: Teacher-assigned remedial fractions module.
-   - `SCEN-PH-F01`: Unsupervised profile privacy modification blocked.
-   - `SCEN-PH-F02`: Unlicensed supplementary content rejected (D-02).
-   - `SCEN-PH-F03`: Excessive study workload rejected (>60 mins).
-3. **Lower Secondary (`docs/test-scenarios/lower_secondary.md`):**
-   - `SCEN-LS-S01`: Grade 9 academic branch exploration.
-   - `SCEN-LS-S02`: Weekly self-directed study schedule generation.
-   - `SCEN-LS-S03`: Conceptual science mastery check-in.
-   - `SCEN-LS-F01`: Prerequisite cycle in study plan rejected.
-   - `SCEN-LS-F02`: High-stakes Konkur test assigned to Grade 7 rejected.
-   - `SCEN-LS-F03`: Private student reflection leaked to guardian blocked (D-04).
-4. **Upper Secondary (`docs/test-scenarios/upper_secondary.md`):**
-   - `SCEN-US-S01`: Experimental track physics & chemistry schedule.
-   - `SCEN-US-S02`: Final exam review timetable generation.
-   - `SCEN-US-S03`: Missed task dynamic rebalancing.
-   - `SCEN-US-F01`: Daily study ceiling breach rejected (>480 mins).
-   - `SCEN-US-F02`: Prompt injection attempting curriculum bypass rejected.
-   - `SCEN-US-F03`: Cross-track subject assignment rejected without elective flag.
-5. **Konkur (`docs/test-scenarios/konkur.md`):**
-   - `SCEN-KO-S01`: Comprehensive 12-month Konkur study plan generation.
-   - `SCEN-KO-S02`: Mock exam manual score intake & weak topic diagnosis.
-   - `SCEN-KO-S03`: High-intensity sprint allocation within physiological limits.
-   - `SCEN-KO-F01`: Physiological study limit violation rejected (>600 mins).
-   - `SCEN-KO-F02`: Uncalibrated mock exam scoring rejected.
-   - `SCEN-KO-F03`: Superseded plan mutation rejected (append-only revision required).
-
----
-
-## 7. Working Tree Isolation Status
-
-Per project safety protocols and Decision D-11 boundary rules:
-- **Preserved in Working Tree (Stage 0.5 Prototypes — NOT COMMITTED):**
-  - `services/api/app/ai/provider.py`
-  - `services/api/app/engines/validator.py`
-  - `services/api/app/schemas/` (`__init__.py`, `planning.py`)
-  - `services/api/tests/test_9router_reliability.py`
-  - `services/api/tests/test_stage_05_validator.py`
-  - `services/api/tests/test_scenarios.py`
-  - `services/api/app/ai/__init__.py` (re-exports prototype provider)
-  - `services/api/app/engines/__init__.py` (re-exports prototype validator)
-- **Stage 0 Committed Baseline:**
-  - Hardened config, CORS, outbox worker, authz checker, test isolation, documentation, and TASK-03 scenario book.
+- **VERIFIED** Next App Router includes the home page (`apps/web/src/app/page.tsx`), owner content page (`apps/web/src/app/admin/content/page.tsx`), health proxy (`apps/web/src/app/api/healthz/route.ts:3`), and owner API proxy (`apps/web/src/app/api/admin/content/[...path]/route.ts:63`). `npm run build` emitted those four routes plus the framework 404 page. Telegram uses the API webhook and outbound adapter noted above.
+- **UNTESTED** live browser and external Telegram/provider delivery. R01 ran Next locally with a synthetic upstream and API tests exercised the outbound adapter with test doubles.

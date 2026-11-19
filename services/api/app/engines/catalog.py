@@ -1,318 +1,100 @@
-"""Educational Resource Whitelist and Catalog.
+"""Trusted catalog adapter. An empty owner-managed catalog is a valid state.
 
-Conforms to D-11 (Principle 3):
-Metadata whitelist (book title, publisher, grade, subject, duration, test counts, page counts).
-Zero full copyrighted content or question text stored or processed.
+Educational resources come exclusively from the Content Service. No bundled
+educational data or synthetic fallbacks are used at application runtime.
 """
 
 from typing import Any
 
 from app.engines.validator import ResourceMeta
+from app.modules.content.service import ContentService
 
-# Detailed metadata representation for AI prompt context
-RESOURCE_METADATA_DETAILS: list[dict[str, Any]] = [
-    {
-        "resource_id": "konkur_bio_g12_ch1",
-        "title": "زیست‌شناسی ۳ — فصل اول: مولکول‌های اطلاعاتی",
-        "subject": "biology",
-        "publisher": "خیلی سبز",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 85,
-        "page_count": 24,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_bio_g12_ch2",
-        "title": "زیست‌شناسی ۳ — فصل دوم: جریان اطلاعات در یاخته",
-        "subject": "biology",
-        "publisher": "خیلی سبز",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 90,
-        "page_count": 28,
-        "prerequisites": ["konkur_bio_g12_ch1"],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_chem_g12_ch1",
-        "title": "شیمی ۳ — فصل اول: مولکول‌ها در خدمت تندرستی",
-        "subject": "chemistry",
-        "publisher": "مبتکران",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 70,
-        "page_count": 22,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_phys_g12_ch1",
-        "title": "فیزیک ۳ — فصل اول: حرکت بر خط راست",
-        "subject": "physics",
-        "publisher": "گاج (میکرو)",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 65,
-        "page_count": 20,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_math_g12_calc",
-        "title": "ریاضیات تجربی — تابع و حد",
-        "subject": "mathematics",
-        "publisher": "خیلی سبز",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 80,
-        "page_count": 25,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_math_calc_limits",
-        "title": "حسابان ۲ — حد و پیوستگی",
-        "subject": "calculus",
-        "publisher": "نشر الگو",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 60,
-        "page_count": 18,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_math_calc_derivatives",
-        "title": "حسابان ۲ — مشتق و کاربرد آن",
-        "subject": "calculus",
-        "publisher": "نشر الگو",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 75,
-        "page_count": 24,
-        "prerequisites": ["konkur_math_calc_limits"],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_math_discrete",
-        "title": "گسسته — نظریه گراف و ترکیبیات",
-        "subject": "discrete_math",
-        "publisher": "گاج",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 55,
-        "page_count": 16,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_math_geom",
-        "title": "هندسه ۳ — ماتریس و بردارها",
-        "subject": "geometry",
-        "publisher": "خیلی سبز",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 50,
-        "page_count": 15,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_hum_literature",
-        "title": "علوم و فنون ادبی ۳ — وزن شعر و سبک‌شناسی",
-        "subject": "literature",
-        "publisher": "خیلی سبز",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 70,
-        "page_count": 20,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_hum_sociology",
-        "title": "جامعه‌شناسی ۳ — تمدن و فرهنگ",
-        "subject": "sociology",
-        "publisher": "مشاوران آموزش",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 60,
-        "page_count": 18,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "konkur_hum_philosophy",
-        "title": "فلسفه ۲ — حکمت و معرفت",
-        "subject": "philosophy_logic",
-        "publisher": "مشاوران آموزش",
-        "stage_code": "konkur",
-        "grade": "G12",
-        "duration_minutes": 60,
-        "test_count": 50,
-        "page_count": 16,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "upper_math_g10_ch1",
-        "title": "ریاضی ۱ دهم — مجموعه، الگو و دنباله",
-        "subject": "mathematics",
-        "publisher": "خیلی سبز",
-        "stage_code": "upper_secondary",
-        "grade": "G10",
-        "duration_minutes": 45,
-        "test_count": 40,
-        "page_count": 15,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "upper_phys_g10_ch1",
-        "title": "فیزیک ۱ دهم — فیزیک و اندازه‌گیری",
-        "subject": "physics",
-        "publisher": "خیلی سبز",
-        "stage_code": "upper_secondary",
-        "grade": "G10",
-        "duration_minutes": 45,
-        "test_count": 35,
-        "page_count": 14,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "upper_chem_g11_ch1",
-        "title": "شیمی ۲ یازدهم — قدر هدایای زمینی را بدانیم",
-        "subject": "chemistry",
-        "publisher": "مبتکران",
-        "stage_code": "upper_secondary",
-        "grade": "G11",
-        "duration_minutes": 45,
-        "test_count": 45,
-        "page_count": 18,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "lower_math_g09_ch1",
-        "title": "ریاضی نهم — مجموعه‌ها",
-        "subject": "mathematics",
-        "publisher": "مبتکران",
-        "stage_code": "lower_secondary",
-        "grade": "G09",
-        "duration_minutes": 30,
-        "test_count": 30,
-        "page_count": 12,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "lower_sci_g09_ch1",
-        "title": "علوم تجربی نهم — مواد و نقش آنها در زندگی",
-        "subject": "science",
-        "publisher": "خیلی سبز",
-        "stage_code": "lower_secondary",
-        "grade": "G09",
-        "duration_minutes": 30,
-        "test_count": 25,
-        "page_count": 10,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "primary_math_g05_ch1",
-        "title": "ریاضی پنجم — عددنویسی و الگوها",
-        "subject": "mathematics",
-        "publisher": "کلاغ سپید",
-        "stage_code": "primary_high",
-        "grade": "G05",
-        "duration_minutes": 20,
-        "test_count": 15,
-        "page_count": 8,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-    {
-        "resource_id": "primary_read_g02_ch1",
-        "title": "فارسی دوم — روان‌خوانی و واژگان",
-        "subject": "reading_fluency",
-        "publisher": "گاج",
-        "stage_code": "primary_low",
-        "grade": "G02",
-        "duration_minutes": 15,
-        "test_count": 10,
-        "page_count": 6,
-        "prerequisites": [],
-        "status": "Published",
-        "license_active": True,
-    },
-]
+# Kept as empty compatibility exports; production never ships fixture content.
+RESOURCE_METADATA_DETAILS: list[dict[str, Any]] = []
+DEFAULT_RESOURCE_CATALOG: dict[str, ResourceMeta] = {}
 
 
-# Local synthetic scheduling fixtures; bibliographic/count/duration claims are unverified.
-# license_active is a legacy metadata-scheduling flag, never a ContentLicense grant.
-for _resource in RESOURCE_METADATA_DETAILS:
-    _resource.update(
-        provenance="local_synthetic_fixture",
-        verification_status="UNVERIFIED",
-        domain_approval="PENDING",
-        authorization_scope="metadata_only_synthetic_evaluation",
-        full_content_access=False,
-        content_license_id=None,
+def get_resources_for_stage(
+    stage_code: str,
+    conn: Any = None,
+    *,
+    grade: str | None = None,
+    track: str | None = None,
+) -> list[dict[str, Any]]:
+    """Read approved, published, licensed units without filling missing fields."""
+    if conn is None:
+        return []
+    numeric_grade = int(grade[1:]) if grade and grade.startswith("G") else None
+    rows = ContentService().get_agent_resources(
+        conn, stage_code=stage_code, grade=numeric_grade, track=track
     )
-
-# Metadata whitelist approval does not grant permission to process/display full content.
-DEFAULT_RESOURCE_CATALOG: dict[str, ResourceMeta] = {
-    r["resource_id"]: ResourceMeta(
-        resource_id=r["resource_id"],
-        stage_code=r["stage_code"],
-        grade=r["grade"],
-        subject=r["subject"],
-        duration_minutes=r["duration_minutes"],
-        prerequisites=tuple(r["prerequisites"]),
-        status=r["status"],
-        license_active=r["license_active"],
-    )
-    for r in RESOURCE_METADATA_DETAILS
-}
+    result = []
+    for row in rows:
+        for target_grade in [numeric_grade] if numeric_grade else row.get("grades", []):
+            if target_grade not in (10, 11, 12):
+                continue
+            item = dict(row)
+            item["status"] = "Published" if row.get("status") == "published" else "Draft"
+            item["grade"] = f"G{target_grade:02d}"
+            item["stage_code"] = stage_code
+            item["prerequisites"] = [str(value) for value in row.get("prerequisites", [])]
+            result.append(item)
+    return result
 
 
-def get_resources_for_stage(stage_code: str) -> list[dict[str, Any]]:
-    """Return catalog resources matching stage for AI prompting or fallback planning."""
-    return [r for r in RESOURCE_METADATA_DETAILS if r.get("stage_code") == stage_code]
+def catalog_from_resources(resources: list[dict[str, Any]]) -> dict[str, ResourceMeta]:
+    """Build the validator snapshot from the same trusted retrieval as the proposer."""
+    return {
+        row["resource_id"]: ResourceMeta(
+            resource_id=row["resource_id"],
+            stage_code=row["stage_code"],
+            grade=row.get("grade"),
+            subject=row.get("subject"),
+            duration_minutes=row.get("duration_minutes"),
+            prerequisites=tuple(row.get("prerequisites", [])),
+            status=row.get("status", "Draft"),
+            license_active=row.get("license_active", False),
+            license_expired=row.get("license_expired", False),
+        )
+        for row in resources
+        if type(row.get("duration_minutes")) is int
+        and 0 < row["duration_minutes"] <= 600
+        and isinstance(row.get("subject"), str)
+        and bool(row["subject"])
+        and isinstance(row.get("grade"), str)
+        and bool(row["grade"])
+    }
 
 
-def get_default_catalog() -> dict[str, ResourceMeta]:
-    """Return dictionary of ResourceMeta instances."""
-    return dict(DEFAULT_RESOURCE_CATALOG)
+def get_default_catalog(
+    conn: Any = None,
+) -> dict[str, ResourceMeta]:
+    """Read the current trusted catalog; no content means an empty mapping."""
+    if conn is None:
+        return {}
+    resources = [
+        *get_resources_for_stage("upper_secondary", conn),
+        *get_resources_for_stage("konkur", conn, grade="G12"),
+    ]
+    return catalog_from_resources(resources)
+
+
+def is_plan_trusted(plan: dict[str, Any], resources: list[dict[str, Any]]) -> bool:
+    """A saved plan must still match the currently reviewed scheduling metadata."""
+    trusted = catalog_from_resources(resources)
+    items = plan.get("items", [])
+    if not items:
+        return False
+    for item in items:
+        meta = trusted.get(item.get("resource_version_id"))
+        if (
+            meta is None
+            or meta.status != "Published"
+            or not meta.license_active
+            or meta.license_expired
+            or item.get("duration_minutes") != meta.duration_minutes
+            or item.get("stage_code") != meta.stage_code
+            or set(item.get("prerequisites", [])) != set(meta.prerequisites)
+        ):
+            return False
+    return True

@@ -9,6 +9,7 @@ Enforces:
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -20,13 +21,14 @@ from app.ai.provider import (
     DeterministicRuleFallbackPlanner,
     NineRouterProvider,
 )
-from app.engines.catalog import get_default_catalog, get_resources_for_stage
+from app.engines.catalog import catalog_from_resources, get_resources_for_stage, is_plan_trusted
 from app.engines.validator import (
     TRACK_SUBJECT_ALLOWLIST,
     DeterministicValidationError,
     DeterministicValidator,
 )
 from app.modules.consultation.repository import ConsultationRepository
+from app.modules.content.service import ContentService
 from app.schemas.planning import (
     STAGE_CAPACITY_LIMITS,
     GradeCode,
@@ -40,6 +42,48 @@ from app.schemas.planning import (
 logger = logging.getLogger("kunkor.consultation")
 
 
+def trusted_plan_view(conn: psycopg.Connection[Any], plan: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a student-safe saved plan only while its reviewed metadata is unchanged."""
+    slots = plan.get("intake_slots") or {}
+    resources = get_resources_for_stage(
+        plan.get("stage_code", ""), conn, grade=slots.get("grade"), track=slots.get("track")
+    )
+    if not is_plan_trusted(plan, resources):
+        return None
+
+    def timestamp(value: Any) -> datetime | None:
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if not isinstance(value, datetime):
+            return None
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    created_at = timestamp(plan.get("created_at"))
+    by_id = {row["resource_id"]: row for row in resources}
+    allowed_subjects = TRACK_SUBJECT_ALLOWLIST.get(slots.get("track", ""), set())
+    for item in plan.get("items", []):
+        row = by_id[item["resource_version_id"]]
+        published_at = timestamp(row.get("published_at"))
+        if (
+            created_at is None
+            or published_at is None
+            or published_at > created_at
+            or row.get("grade") != slots.get("grade")
+            or row.get("subject") not in allowed_subjects
+        ):
+            return None
+    result = dict(plan)
+    result.pop("raw_proposal", None)
+    return result
+
+
+class TrustedContentUnavailable(Exception):
+    """Catalog changed or lacks scheduling metadata; intake remains usable."""
+
+
 class ConsultationService:
     """End-to-end educational consultation service for Telegram student interaction."""
 
@@ -50,6 +94,66 @@ class ConsultationService:
     ):
         self.ai_provider = ai_provider or NineRouterProvider()
         self.repo = repository or ConsultationRepository()
+
+    def trusted_student_result(
+        self, conn: psycopg.Connection[Any], student_id: UUID, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Replay educational results only while their current catalog sources are trusted."""
+        result = dict(result)
+        if isinstance(result.get("plan"), dict):
+            result["plan"] = dict(result["plan"])
+            result["plan"].pop("raw_proposal", None)
+        reference = result.get("plan_id")
+        if reference is None:
+            return result
+        plan = self.repo.get_study_plan_by_id(conn, student_id, UUID(str(reference)))
+        slots = (plan or {}).get("intake_slots") or {}
+        resources = get_resources_for_stage(
+            (plan or {}).get("stage_code", ""),
+            conn,
+            grade=slots.get("grade"),
+            track=slots.get("track"),
+        )
+        if plan is None or trusted_plan_view(conn, plan) is None:
+            return {
+                "status": "awaiting_content",
+                "student_id": str(student_id),
+                "plan": None,
+                "citations": [],
+                "response_text": (
+                    "Approved content is currently unavailable. Your records are saved."
+                ),
+            }
+        if plan["status"] != "active":
+            return {
+                "status": "plan_superseded",
+                "student_id": str(student_id),
+                "plan": None,
+                "citations": [],
+                "response_text": "A newer plan is available through the active plan interface.",
+            }
+        # Regenerate any cached educational text from the current trusted titles.
+        if result.get("response_text"):
+            intake = IntakeSlots(**slots)
+            validated = StudyPlan.model_validate(
+                {
+                    "student_id": student_id,
+                    "plan_id": plan["id"],
+                    "revision_no": plan["revision_no"],
+                    "items": [
+                        {
+                            "item_id": str(item["id"]),
+                            "resource_version_id": item["resource_version_id"],
+                            "stage_code": item["stage_code"],
+                            "duration_minutes": item["duration_minutes"],
+                            "prerequisites": item.get("prerequisites", []),
+                        }
+                        for item in plan["items"]
+                    ],
+                }
+            )
+            result["response_text"] = self._format_study_plan_message(validated, intake, resources)
+        return result
 
     def _parse_stage_and_grade(self, text: str) -> tuple[StageCode, GradeCode]:
         text_lower = text.lower()
@@ -179,8 +283,10 @@ class ConsultationService:
             "برنامه برای یک روز مطالعه است."
         )
 
-    def _format_study_plan_message(self, plan: StudyPlan, intake: IntakeSlots) -> str:
-        resources = {r["resource_id"]: r for r in get_resources_for_stage(intake.stage_code)}
+    def _format_study_plan_message(
+        self, plan: StudyPlan, intake: IntakeSlots, available_resources: list[dict[str, Any]]
+    ) -> str:
+        resources = {r["resource_id"]: r for r in available_resources}
         lines = [
             "🎉 برنامه مطالعه شخصی‌سازی شده شما با موفقیت آماده و اعتبارسنجی شد!\n",
             f"🎯 مقطع: {intake.stage_code} | رشته: {intake.track}",
@@ -190,7 +296,10 @@ class ConsultationService:
             "واحد‌های مطالعاتی پیشنهادی:",
         ]
         for idx, item in enumerate(plan.items, start=1):
-            title = resources[item.resource_version_id]["title"]
+            title = (
+                resources.get(item.resource_version_id, {}).get("title")
+                or "منبع تأییدشده در دسترس نیست"
+            )
             chunks = split_study_sessions([item.model_dump()], intake.max_session_minutes or 60)
             session_text = " + ".join(str(chunk["duration_minutes"]) for chunk in chunks)
             lines.append(
@@ -206,8 +315,9 @@ class ConsultationService:
         intake: IntakeSlots,
         completion_rate: float,
         missed_units: list[str],
+        available_resources: list[dict[str, Any]],
     ) -> str:
-        resources = {r["resource_id"]: r for r in get_resources_for_stage(intake.stage_code)}
+        resources = {r["resource_id"]: r for r in available_resources}
         lines = [
             f"📊 گزارش پیشرفت شما ثبت شد! درصد تحقق: {completion_rate:.1f}%\n",
             f"🔄 برنامه مطالعاتی جدید (ویرایش {plan.revision_no}) بر اساس عملکرد شما بازتنظیم شد:",
@@ -218,7 +328,10 @@ class ConsultationService:
             lines.append(f"⚠️ مباحث جبرانی در اولویت: {', '.join(missed_units)}\n")
         lines.append("واحد‌های مطالعاتی بازنگری‌شده:")
         for idx, item in enumerate(plan.items, start=1):
-            title = resources[item.resource_version_id]["title"]
+            title = (
+                resources.get(item.resource_version_id, {}).get("title")
+                or "منبع تأییدشده در دسترس نیست"
+            )
             chunks = split_study_sessions([item.model_dump()], intake.max_session_minutes or 60)
             session_text = " + ".join(str(chunk["duration_minutes"]) for chunk in chunks)
             lines.append(
@@ -368,16 +481,21 @@ class ConsultationService:
         if (
             chat.get("type") != "private"
             or type(chat.get("id")) is not int
-            or chat["id"] <= 0
+            or not 0 < chat["id"] < 2**63
             or type(sender.get("id")) is not int
             or sender.get("id") != chat["id"]
         ):
             return {"status": "ignored", "reason": "private_identity_required"}
         result = await self._handle_telegram_update(conn, update, test_mode)
-        if result.get("response_text") and result.get("status") not in (
-            "plan_generated",
-            "plan_revised",
-            "curriculum_completed",
+        if (
+            result.get("response_text")
+            and result.get("status")
+            not in (
+                "plan_generated",
+                "plan_revised",
+                "available_content_completed",
+            )
+            and not (result.get("status") == "awaiting_content" and result.get("progress_id"))
         ):
             self.repo.enqueue_outbox_event(
                 conn,
@@ -385,7 +503,12 @@ class ConsultationService:
                 "TELEGRAM_MESSAGE_REQUESTED",
                 "telegram_update",
                 str(update["update_id"]),
-                {"telegram_chat_id": chat["id"], "message_text": result["response_text"]},
+                {
+                    "telegram_chat_id": chat["id"],
+                    "message_text": result["response_text"],
+                    "plan_id": result.get("plan_id"),
+                    "requires_trusted_catalog": result.get("plan_id") is not None,
+                },
             )
         return result
 
@@ -470,6 +593,16 @@ class ConsultationService:
                 and not missed
                 and text.strip().lower() in ("/progress", "گزارش", "پیشرفت")
             ):
+                if trusted_plan_view(conn, active_plan) is None:
+                    return {
+                        "status": "awaiting_content",
+                        "student_id": str(student_id),
+                        "plan": None,
+                        "citations": [],
+                        "response_text": (
+                            "منبع تأییدشده در دسترس نیست؛ گزارش‌های قبلی شما حفظ شده‌اند."
+                        ),
+                    }
                 item_lines = "\n".join(
                     f"- {it['resource_version_id']} ({it['duration_minutes']} دقیقه)"
                     for it in active_plan["items"]
@@ -482,6 +615,7 @@ class ConsultationService:
                 return {
                     "status": "progress_prompt",
                     "student_id": str(student_id),
+                    "plan_id": str(active_plan["id"]),
                     "response_text": guide_msg,
                 }
 
@@ -515,8 +649,19 @@ class ConsultationService:
                         telegram_chat_id=telegram_chat_id,
                     )
                 else:
+                    if trusted_plan_view(conn, active_plan) is None:
+                        return {
+                            "status": "awaiting_content",
+                            "student_id": str(student_id),
+                            "plan": None,
+                            "citations": [],
+                            "response_text": (
+                                "منبع تأییدشده در دسترس نیست؛ اطلاعات شما حفظ شده است."
+                            ),
+                        }
                     return {
                         "status": "active_plan_info",
+                        "plan_id": str(active_plan["id"]),
                         "student_id": str(student_id),
                         "response_text": (
                             f"شما دارای برنامه فعال (ویرایش {active_plan['revision_no']}) هستید.\n"
@@ -539,6 +684,7 @@ class ConsultationService:
             self.repo.update_intake_session(
                 conn,
                 session_id=session["id"],
+                student_id=student_id,
                 current_step="stage",
                 slots={},
             )
@@ -563,6 +709,7 @@ class ConsultationService:
             self.repo.update_intake_session(
                 conn,
                 session_id=session["id"],
+                student_id=student_id,
                 current_step="stage",
                 slots={},
             )
@@ -595,7 +742,12 @@ class ConsultationService:
             slots["clarification_attempts"] = attempts
             exhausted = attempts > 2
             self.repo.update_intake_session(
-                conn, session["id"], step, slots, is_completed=exhausted
+                conn,
+                session["id"],
+                step,
+                slots,
+                is_completed=exhausted,
+                student_id=student_id,
             )
             return {
                 "status": "intake_cancelled" if exhausted else "clarification_required",
@@ -624,6 +776,7 @@ class ConsultationService:
             self.repo.update_intake_session(
                 conn,
                 session_id=session["id"],
+                student_id=student_id,
                 current_step=next_step,
                 slots=slots,
             )
@@ -645,6 +798,7 @@ class ConsultationService:
             self.repo.update_intake_session(
                 conn,
                 session_id=session["id"],
+                student_id=student_id,
                 current_step=next_step,
                 slots=slots,
             )
@@ -667,6 +821,7 @@ class ConsultationService:
             self.repo.update_intake_session(
                 conn,
                 session_id=session["id"],
+                student_id=student_id,
                 current_step=next_step,
                 slots=slots,
             )
@@ -681,7 +836,9 @@ class ConsultationService:
             slots["weak_subjects"] = self._parse_weak_subjects(
                 text, slots.get("track", "experimental")
             )
-            self.repo.update_intake_session(conn, session["id"], "goal", slots)
+            self.repo.update_intake_session(
+                conn, session["id"], "goal", slots, student_id=student_id
+            )
             return {
                 "status": "intake_in_progress",
                 "step": "goal",
@@ -691,7 +848,9 @@ class ConsultationService:
 
         if step == "goal":
             slots["goal_code"] = self._parse_goal(text)
-            self.repo.update_intake_session(conn, session["id"], "days", slots)
+            self.repo.update_intake_session(
+                conn, session["id"], "days", slots, student_id=student_id
+            )
             return {
                 "status": "intake_in_progress",
                 "step": "days",
@@ -702,7 +861,9 @@ class ConsultationService:
 
         if step == "days":
             slots["study_days"] = self._parse_days(text)
-            self.repo.update_intake_session(conn, session["id"], "session", slots)
+            self.repo.update_intake_session(
+                conn, session["id"], "session", slots, student_id=student_id
+            )
             return {
                 "status": "intake_in_progress",
                 "step": "session",
@@ -727,16 +888,23 @@ class ConsultationService:
                 max_session_minutes=slots["max_session_minutes"],
             )
 
-            available_resources = get_resources_for_stage(intake.stage_code)
+            available_resources = get_resources_for_stage(
+                intake.stage_code, conn, grade=intake.grade, track=intake.track
+            )
 
             if not DeterministicRuleFallbackPlanner.generate_fallback_plan(
                 intake, available_resources
             )["items"]:
-                self.repo.update_intake_session(conn, session["id"], "session", slots)
+                self.repo.update_intake_session(
+                    conn, session["id"], "session", slots, student_id=student_id
+                )
                 return {
-                    "status": "resources_unavailable",
+                    "status": "awaiting_content",
+                    "step": "session",
+                    "plan": None,
+                    "citations": [],
                     "student_id": str(student_id),
-                    "response_text": "برای پایه، رشته و زمان انتخابی منبع قابل برنامه‌ریزی نداریم. "
+                    "response_text": "منبع تأییدشده و منتشرشده‌ای برای این بخش در دسترس نیست. "
                     "اطلاعات شما حفظ شد؛ برای تغییر آن‌ها /start بفرستید.",
                 }
 
@@ -747,10 +915,26 @@ class ConsultationService:
             next_rev = self.repo.get_latest_plan_revision(conn, student_id) + 1
             validated_plan: StudyPlan
 
-            validated_plan, proposal = await self.validate_or_repair(
-                proposal, intake, available_resources, student_id, next_rev
-            )
+            try:
+                validated_plan, proposal = await self.validate_or_repair(
+                    proposal, intake, available_resources, student_id, next_rev, conn=conn
+                )
+            except TrustedContentUnavailable:
+                self.repo.update_intake_session(
+                    conn, session["id"], "session", slots, student_id=student_id
+                )
+                return {
+                    "status": "awaiting_content",
+                    "step": "session",
+                    "student_id": str(student_id),
+                    "plan": None,
+                    "citations": [],
+                    "response_text": "منبع تأییدشده در دسترس نیست؛ اطلاعات شما حفظ شد.",
+                }
 
+            available_resources = get_resources_for_stage(
+                intake.stage_code, conn, grade=intake.grade, track=intake.track
+            )
             # Persist Study Plan in PostgreSQL
             items_data = [item.model_dump() for item in validated_plan.items]
             self.repo.save_study_plan(
@@ -767,7 +951,9 @@ class ConsultationService:
             )
 
             # Enqueue Outbox Event for delivery
-            formatted_message = self._format_study_plan_message(validated_plan, intake)
+            formatted_message = self._format_study_plan_message(
+                validated_plan, intake, available_resources
+            )
             self.repo.enqueue_outbox_event(
                 conn=conn,
                 student_id=student_id,
@@ -787,6 +973,7 @@ class ConsultationService:
             self.repo.update_intake_session(
                 conn,
                 session_id=session["id"],
+                student_id=student_id,
                 current_step="completed",
                 slots=slots,
                 is_completed=True,
@@ -865,7 +1052,7 @@ class ConsultationService:
         completion_rate = (len(completed_units) / max(1, total_units)) * 100.0
 
         # 2. Mark current plan superseded
-        self.repo.supersede_plan(conn, plan_id)
+        self.repo.supersede_plan(conn, plan_id, student_id=student_id)
 
         # 3. Retrieve student's completed unit IDs from history
         all_completed = self.repo.get_completed_unit_ids_for_student(conn, student_id)
@@ -903,7 +1090,9 @@ class ConsultationService:
         intake = IntakeSlots(**intake_kwargs)
 
         # 5. Filter available resources: exclude completed, prioritize missed
-        stage_resources = get_resources_for_stage(intake.stage_code)
+        stage_resources = get_resources_for_stage(
+            intake.stage_code, conn, grade=intake.grade, track=intake.track
+        )
         uncompleted_resources = [
             r
             for r in stage_resources
@@ -912,7 +1101,12 @@ class ConsultationService:
             and r.get("subject") in TRACK_SUBJECT_ALLOWLIST[intake.track]
         ]
         if not uncompleted_resources:
-            response = "همه مباحث این دوره تکمیل شد؛ برنامه جدیدی لازم نیست."
+            catalog_empty = not stage_resources
+            response = (
+                "منبع تأییدشده و منتشرشده‌ای برای این بخش در دسترس نیست؛ گزارش شما ذخیره شد."
+                if catalog_empty
+                else "همه واحدهای منتشرشده فعلی تکمیل شد؛ می‌توانید بعداً دوباره بررسی کنید."
+            )
             if telegram_chat_id:
                 self.repo.enqueue_outbox_event(
                     conn,
@@ -923,7 +1117,9 @@ class ConsultationService:
                     {"telegram_chat_id": telegram_chat_id, "message_text": response},
                 )
             return {
-                "status": "curriculum_completed",
+                "status": "awaiting_content" if catalog_empty else "available_content_completed",
+                "plan": None,
+                "citations": [],
                 "student_id": str(student_id),
                 "progress_id": str(progress_id),
                 "response_text": response,
@@ -941,9 +1137,35 @@ class ConsultationService:
         )
         validated_plan: StudyPlan
 
-        validated_plan, proposal = await self.validate_or_repair(
-            proposal, intake, prioritized_resources, student_id, next_rev, all_completed
-        )
+        try:
+            validated_plan, proposal = await self.validate_or_repair(
+                proposal,
+                intake,
+                prioritized_resources,
+                student_id,
+                next_rev,
+                all_completed,
+                conn=conn,
+            )
+        except TrustedContentUnavailable:
+            response = "منبع تأییدشده در دسترس نیست؛ گزارش شما ذخیره شد."
+            if telegram_chat_id:
+                self.repo.enqueue_outbox_event(
+                    conn,
+                    student_id,
+                    "TELEGRAM_MESSAGE_REQUESTED",
+                    "daily_progress",
+                    str(progress_id),
+                    {"telegram_chat_id": telegram_chat_id, "message_text": response},
+                )
+            return {
+                "status": "awaiting_content",
+                "student_id": str(student_id),
+                "progress_id": str(progress_id),
+                "plan": None,
+                "citations": [],
+                "response_text": response,
+            }
 
         # 7. Persist revised study plan
         items_data = [item.model_dump() for item in validated_plan.items]
@@ -960,9 +1182,12 @@ class ConsultationService:
             intake_slots=intake.model_dump(),
         )
 
+        prioritized_resources = get_resources_for_stage(
+            intake.stage_code, conn, grade=intake.grade, track=intake.track
+        )
         # 8. Enqueue Outbox delivery event
         formatted_message = self._format_revision_message(
-            validated_plan, intake, completion_rate, missed_units
+            validated_plan, intake, completion_rate, missed_units, prioritized_resources
         )
         self.repo.enqueue_outbox_event(
             conn=conn,
@@ -999,8 +1224,22 @@ class ConsultationService:
         student_id: UUID,
         revision_no: int,
         completed: Optional[set[str]] = None,
+        *,
+        conn: Any = None,
     ) -> tuple[StudyPlan, dict[str, Any]]:
-        catalog = get_default_catalog()
+        if conn is not None:
+            original_ids = {row["resource_id"] for row in resources}
+            ContentService().lock_agent_resources(conn, sorted(original_ids))
+            resources = [
+                row
+                for row in get_resources_for_stage(
+                    intake.stage_code, conn, grade=intake.grade, track=intake.track
+                )
+                if row["resource_id"] in original_ids
+            ]
+        if not resources:
+            raise TrustedContentUnavailable("No approved, published scheduling resources available")
+        catalog = catalog_from_resources(resources)
         # ponytail: two fresh proposals; add structured repair feedback with provider support.
         for attempt in range(3):
             try:
@@ -1017,8 +1256,8 @@ class ConsultationService:
             intake, resources, completed_unit_ids=completed
         )
         if not fallback["items"]:
-            raise HTTPException(
-                422, "No trusted resources fit the supplied intake and daily capacity."
+            raise TrustedContentUnavailable(
+                "No trusted resources fit the supplied intake and daily capacity."
             )
         return DeterministicValidator.validate_and_parse_proposal(
             fallback, intake, catalog, student_id, revision_no, completed_unit_ids=completed

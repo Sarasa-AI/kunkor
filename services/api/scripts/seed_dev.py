@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Development seed script (Baseline for TASK-00).
+Development initialization intentionally leaves the educational catalog empty.
 """
 
 import sys
 
-print("[SEED-DEV] Dev seed baseline ready. Synthetic data seeding active in later tasks.")
+print("[SEED-DEV] Catalog remains empty. Synthetic content belongs exclusively in automated tests.")
 sys.exit(0)

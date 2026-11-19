@@ -19,6 +19,8 @@ from app.core.config import settings
 from app.core.db import get_connection_string
 from app.main import app
 
+pytestmark = pytest.mark.usefixtures("synthetic_planner_catalog")
+
 client = TestClient(app)
 
 ADMIN_TEST_KEY = "synthetic-test-admin-key"

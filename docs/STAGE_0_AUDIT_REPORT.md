@@ -1,115 +1,61 @@
-# Kunkor — Stage 0 Security, Technical & Architecture Audit Report
+# Stage 0 Audit
 
-Document ID: `AUDIT-STAGE-0`  
-Evaluation Target: Commit `a733c236ad6beeb3dffca1e2e2ec7c2b5ec58451` + verified Stage 0 remediations  
-Inspection Date: 2026-10-31 / 2026-11-01  
-Overall Stage 0 Gate Status: **PASSED / COMPLETE**
+**Local owner disposition (2026-11-19).** Stage 0 local verification approved. The delegated release checks are open in `HUMAN_ACTION_REQUIRED.md`. The two supervisor verdicts below record the earlier review scope.
 
----
+**VERIFIED** input branch `main`, HEAD `84acb5fe1abde4210ac15b3024dd2da6c34ec83b`, dirty worktree. Tests used the working tree and synthetic records on disposable PostgreSQL 16.15. See `R01_CI_VERIFICATION_REPORT.md` for commands and local/remote CI status.
 
-## 1. Executive Summary
+## Security controls
 
-This report delivers the official Stage 0 evaluation for the Kunkor Educational Platform, synthesizing findings across technical infrastructure, security posture, database architecture, worker mechanics, and acceptance test coverage. 
+| Control | Status | Evidence and scope |
+| --- | --- | --- |
+| SEC-01 Endpoint authentication | VERIFIED | `make authz-matrix` returned `Evaluated 47 routes.` and `100% of routes meet authorization criteria.` Five public GET/HEAD paths are listed in `services/api/app/core/authz.py:9`. Student, webhook, operations, and content-owner dependencies are attached in `services/api/app/modules/identity/router.py:47`, `services/api/app/modules/consultation/router.py:86`, `services/api/app/modules/operations/router.py:24`, and `services/api/app/modules/content/admin_router.py:24`. Negative credential tests include `services/api/tests/test_phase1_identity_isolation.py:198`, `services/api/tests/test_phase1_identity_isolation.py:317`, and `services/api/tests/test_web_consultation_endpoints.py:109`. |
+| SEC-02 Runtime deny by default (ADR-3) | VERIFIED after fix | `services/api/app/main.py:21` invokes the shared policy at ASGI startup. `services/api/app/core/authz.py:22` requires a marked, attached dependency for each non-public route. `services/api/tests/test_authz_routes.py:39` observes startup rejection for an unguarded nested route. `services/api/tests/test_security_remediation.py:141` rejects endpoint metadata alone. This protects the route registry loaded at startup, with ASGI lifespan enabled. Per-route dependencies enforce student, webhook and admin permissions on requests. |
+| SEC-03 Isolation by student ID (ADR-8) | VERIFIED for student routes and ownership constraints | Signed identity resolves a private Telegram binding at `services/api/app/modules/identity/auth.py:51`. The plan and progress ownership foreign keys are at `services/api/migrations/0009_phase1_identity_isolation.up.sql:13`. The full suite passed the 32-item identity-isolation and 19-item Phase 2 identity test files. Negative cases include foreign intake/plan mutations and cross-student context/progress (`services/api/tests/test_phase1_identity_isolation.py:144`, `services/api/tests/test_phase1_identity_isolation.py:203`, `services/api/tests/test_phase1_identity_isolation.py:259`), plus wrong-owner/wrong-chat delivery (`services/api/tests/test_content_delivery.py:151`). Application filters and relational constraints provide the observed isolation. Privileged admin operations intentionally have cross-student scope. Production database role grants and RLS enforcement are untested. |
+| SEC-04 Secret scanning | UNTESTED with Gitleaks | `command -v gitleaks` exited 1. A manual bounded pattern check with `git rev-list --all` and `git grep -I -l -E` found zero candidate paths across 19 reachable revisions. The same patterns checked 176 active text files with zero candidates, excluding local environment files and evidence artifacts. Reviewed defaults at `services/api/app/core/config.py:24` and `services/api/app/core/config.py:85`, plus ignore rules at `.gitignore:47`. Known dev/CI placeholders require separate treatment from credentials. Git history and private evidence are outside the CI job's two-pattern scope. |
+| SEC-05 CORS | VERIFIED | Explicit origins, credentials conditional on a nonempty allowlist, authorization and idempotency headers (`services/api/app/main.py:34`). Production defaults to no origins, wildcard removed, malformed origins rejected (`services/api/app/core/config.py:85`, `services/api/app/core/config.py:114`). Exact-origin and validation tests in `services/api/tests/test_phase1_http_security.py:39`; authenticated write preflight in `services/api/tests/test_web_consultation_endpoints.py:369`. |
+| SEC-06 Strict input validation | REFUTED as a uniform guarantee | `IntakeSlots` and content fields reject extras (`services/api/app/schemas/planning.py:50`, `services/api/app/modules/content/management.py:21`). Profile consent uses `StrictBool` (`services/api/app/modules/identity/router.py:27`). Profile/intake/progress HTTP models still default to extra-field omission, and some scalar fields coerce types (`services/api/app/modules/identity/router.py:20`, `services/api/app/modules/consultation/router.py:57`). The Telegram payload is a dict with explicit private-chat/type checks upstream of writes (`services/api/app/modules/consultation/service.py:461`). Existing negative tests verify ownership ignores a supplied foreign student ID. These findings establish a validation consistency gap without an observed authorization bypass. |
+| SEC-07 Dependency vulnerability scan | UNTESTED | `command -v trivy` exited 1. `pip check` returned `No broken requirements found.` That command only checks dependency consistency. |
 
-All identified defects across the initial baseline (SEC-01, SEC-02, SEC-03, SEC-05, WK-01..04, DB-04) have been remediated, verified by 20 local automated tests, and validated in remote continuous integration on GitHub Actions (Run ID `41260318410`). Stage 0.5 prototypes remain strictly isolated and uncommitted in compliance with Roadmap v2.1 safety rules.
+## Database and worker controls
 
----
+| Control | Status | Evidence and scope |
+| --- | --- | --- |
+| DB-01 Clean forward migration | VERIFIED for the implemented runner, REFUTED for Alembic | Fresh PostgreSQL 16.15, `make migrate` applied 0001 through 0011. `Makefile:34` calls `services/api/scripts/migrate.py`. No Alembic configuration, migration tree or declared dependency was found. |
+| DB-02 Downgrade and re-upgrade | VERIFIED for the implemented runner | `make migrate-check` printed `Applied 11 migrations.`, `Rolled back 11 migrations.`, and `Successfully applied 11 migrations.` on the disposable instance. A current-data rollback refusal when the older schema cannot represent data is tested in `services/api/tests/test_content_owner.py:313`. Production-data downgrade was untested. |
+| DB-03 Transaction boundaries | VERIFIED for tested writes | Shared connection and explicit commit for consultation state, outbox and idempotency (`services/api/app/modules/consultation/router.py:341`, `services/api/app/modules/consultation/router.py:369`). Failure-injection tests cover identity, plan/progress audit, and retention rollback (`services/api/tests/test_phase1_identity_isolation.py:122`, `services/api/tests/test_phase1_identity_isolation.py:322`, `services/api/tests/test_retention.py:392`). AI attempt accounting commits independently by design (`services/api/tests/test_ai_usage.py:111`). |
+| DB-04 Duplicate writes | VERIFIED for consultation, REFUTED as a universal guarantee | Student-scoped request locks, key lookup, and request hash conflict check at `services/api/app/modules/consultation/repository.py:498`. Unit and integration evidence at `services/api/tests/test_idempotency_and_flags.py:12`, `services/api/tests/test_web_consultation_endpoints.py:382`, `services/api/tests/test_web_consultation_endpoints.py:427`, and `services/api/tests/test_telegram_consultation_flow.py:255`. Privileged owner creates and append-only entitlement submissions lack a general request replay key (`services/api/app/modules/content/admin_router.py:50`, `services/api/app/modules/operations/repository.py:195`). Repeated owner commands are outside the verified consultation contract. |
+| WK-01 Concurrent claim | VERIFIED | `FOR UPDATE SKIP LOCKED` at `services/api/app/workers/outbox_worker.py:145`. Two real PG transactions in `services/api/tests/test_outbox_worker.py:236` verify locked work is skipped and subsequent work completes. |
+| WK-02 Retry and dead letter | VERIFIED after fix | `services/api/app/workers/telegram.py:31` classifies invalid messages and explicit HTTP 400/403 rejections as permanent. The outbox persists terminal count or bounded backoff for other failures (`services/api/app/workers/outbox_worker.py:184`). Mocked 400/403 and 429/500 with real DB state checked in `services/api/tests/test_outbox_worker.py:203`. Recovery requires admin scope (`services/api/tests/test_operations_recovery.py:12`). Real provider responses and honoring provider retry-after are untested. |
+| WK-03 Restart recovery | VERIFIED for uncommitted claim rollback | `services/api/tests/test_outbox_worker.py:236` rolls back a separate connection's claim, runs a new poll, and observes the released row processed once. There is no persisted in-flight lease. If external acceptance precedes database commit, the row can be redelivered. This is at-least-once behavior as exposed at `services/api/app/modules/operations/router.py:53`. External acceptance followed by process loss was untested. |
+| WK-04 Worker log safety | VERIFIED for audited paths | Worker logs use internal event UUID and exception type (`services/api/app/workers/outbox_worker.py:184`) and omit free-form aggregate/event fields. `services/api/app/workers/telegram.py:11` redacts the token-bearing URL. Worker regressions verify synthetic token, rejection body and aggregate sentinels stay out of logs (`services/api/tests/test_outbox_worker.py:180`, `services/api/tests/test_outbox_worker.py:203`, `services/api/tests/test_outbox_worker.py:236`). Real Uvicorn synthetic failure checks run at `services/api/tests/test_phase1_http_security.py:163`. External log sinks and third-party logs remain untested. |
 
-## 2. Security Audit & Remediation (SEC-01 through SEC-07)
+## Confirmed blockers and fixes
 
-| Finding ID | Severity | Component | Finding Description | Remediation Implemented | Verification Evidence |
-|---|---|---|---|---|---|
-| `SEC-01` | Critical | `app/main.py`, `app/core/config.py` | Wildcard CORS origin (`allow_origins=["*"]`) combined with `allow_credentials=True`. Modern browsers reject credentialed wildcard CORS; misconfigured origin reflection exposes authenticated sessions. | Added `CORS_ALLOWED_ORIGINS` list parsing in `Settings`. Stripped wildcard `*` when credentials enabled. Bound `CORSMiddleware` to whitelist origins. | `test_sec_01_cors_allowed_origin`, `test_sec_01_cors_disallowed_origin_rejected`, `test_sec_01_cors_wildcard_never_allowed_with_credentials` (3/3 pass). |
-| `SEC-02` | High | `app/core/config.py`, `scripts/migrate.py` | Hardcoded default database password (`kunkor_dev_password`) used as fallback if environment variables unset, risking accidental production deployment. | Implemented model validator in `Settings` terminating process if `ENVIRONMENT=production` and `DATABASE_URL` is empty or contains `kunkor_dev_password`. Hardened `scripts/migrate.py` with credential checks. | `test_sec_02_production_missing_database_url_fails`, `test_sec_02_production_insecure_default_password_fails`, `test_sec_02_migrate_rejects_insecure_password_in_production` (4/4 pass). |
-| `SEC-03` | High | `apps/web/package.json` | 5 High/Critical CVEs in Next.js 14.2.15, Glob 10.3.10, and PostCSS 8.4.31 (Denial of Service, SSRF, CLI command injection). | Upgraded Next.js to `^15.5.28` (React 19). Added package dependency overrides for `glob` (`^10.5.0`) and `postcss` (`^8.5.32`). Rebuilt lockfile. | `npm audit` confirms 0 high/critical vulnerabilities. `npm run lint`, `npm run typecheck`, and `npm run build` static export pass cleanly. |
-| `SEC-04` | Medium | `services/api/requirements.txt` | Unpinned Python dependencies using lower bounds (`>=`) rather than exact cryptographic lockfiles. | Enforced strict dependency version bounds and compatible release constraints in virtual environment. | Ruff, Mypy, and Pytest run cleanly with zero import conflicts. |
-| `SEC-05` | Medium | `services/api/scripts/check_authz_matrix.py` | Route inspection checked only `len(dependencies) > 0`, allowing arbitrary no-op lambdas (`Depends(lambda: None)`) to pass as 100% compliant authorization. | Replaced naive length check with `has_valid_authz()` requiring `__authz_required__` markers or recognized authz dependencies (`require_auth`, `AuthzGuard`, etc.). | `test_sec_05_authz_checker_rejects_dummy_dependency` and `test_sec_05_authz_checker_accepts_security_marker` (2/2 pass). |
-| `SEC-06` | Medium | `.github/workflows/ci.yml` | Secret scanning matched static string grep against repository, failing on documentation examples and workflow files. | Replaced naive scanner with scoped pattern grep excluding `.github`, `node_modules`, and documentation (`*.md`), preventing false positives while capturing real keys. | GitHub Actions Run `41260318410` passed Secret & Dependency Scan step cleanly. |
-| `SEC-07` | Low | `services/api/Dockerfile`, `apps/web/Dockerfile` | Docker containers run as root user by default. | Container hardening scheduled for production staging (Stage 1 / WP-16); local development runs cleanly in isolated non-privileged contexts. | Evaluated for Stage 1 container release gate. |
+| Severity and status | Evidence and impact | Minimal fix | Acceptance |
+| --- | --- | --- | --- |
+| HIGH / VERIFIED resolved | Initial `.github/workflows/ci.yml:112` used consecutive negated grep commands. Bash exited 0 with only the first blocked marker present, masking a CI detection. | Use one quiet tracked-source search and return a failure on a match or a scan error. | Extracted shell block on synthetic fixtures returned `clean: exit=0`, `first: exit=1`, `second: exit=1`. |
+| HIGH / VERIFIED resolved | Initial `services/api/app/main.py:14` had no startup policy. Initial `services/api/scripts/check_authz_matrix.py:33` accepted a callable name or endpoint marker independently of an attached enforcing dependency. A deployment could serve a newly unguarded route while the checker accepted metadata. | Share strict attached-dependency policy between CI and ASGI startup. Keep the five existing read-only public paths. | `services/api/tests/test_authz_routes.py:18` and `:35` cover successful startup with inherited policy and failure for an unguarded nested route. `make authz-matrix` passes with 47 registered routes. |
+| HIGH / VERIFIED resolved in Compose config | Initial `docker-compose.yml:7` and `:10` combined development DB credentials with a host publication lacking an address restriction. Any reachable host interface could expose that port under the default configuration. | Bind the development DB publication to IPv4 loopback. Service-to-service networking still uses the Compose network. | `docker compose config --format json` resolved `host_ip=127.0.0.1` and `target=5432`. Existing running stacks were outside the audit changes. |
+| HIGH / VERIFIED resolved by lock path inspection | Initial `services/api/app/workers/outbox_worker.py:117` and `:163` acquired the student row from a second session while the first session held an outbox row. Concurrent erasure locks the student before deleting its outbox rows (`services/api/migrations/0006_retention_policy.up.sql:188`, `:267`). PostgreSQL cannot see the client-side wait between the worker's two sessions. One poll could stall behind a concurrent erasure. | Reuse the claiming connection, use `FOR SHARE NOWAIT` on the student, release validation locks after delivery via savepoint rollback. | Current `services/api/app/workers/outbox_worker.py:42`, `:115`, and `:165`. Real concurrent outbox and trusted-delivery tests passed. The exact retention/worker interleaving was assessed from lock order. |
 
----
+Two additional confirmed worker deficiencies were fixed within scope. The previous transport collapsed permanent and temporary failures into one retry path. The generic dispatch log emitted free-form event and aggregate values. WK-02 and WK-04 record the regression checks.
 
-## 3. Database Architecture & Integrity Audit (DB-01 through DB-04)
+## Gate conditions
 
-| Check ID | Component | Standard / Requirement | Observed Implementation & Verification | Status |
-|---|---|---|---|---|
-| `DB-01` | Migration Repeatability | Migrations must be reversible and idempotent without data corruption. | Tested `0001_baseline_schema` via `migrate_check.py`: forward apply -> rollback down -> re-apply forward. 100% clean execution in 0.08s. | **PASS** |
-| `DB-02` | Foundational Tables | Schema must declare `audit_events`, `outbox_events`, `idempotency_keys`, `feature_flags`, and `entitlements` per Section 2.3. | All 5 tables created with primary keys, indexes, and UUID defaults. `idx_idempotency_keys_unique` and partial outbox indexes verified. | **PASS** |
-| `DB-03` | Immutability Triggers | Append-only tables (`audit_events`) must reject `UPDATE` and `DELETE` at SQL engine level (ADR-0005). | Trigger `trg_audit_events_append_only` calling `prevent_append_only_mutation()` rejects UPDATE/DELETE operations with SQLSTATE `23505`. Verified in `test_append_only.py`. | **PASS** |
-| `DB-04` | Non-Disposable DB Guard | Destructive migration tests must never run against production or persistent application databases. | Implemented `require_test_database()` guard checking database name suffix (`_test`), host allowlist, and `ENVIRONMENT != production`. Verified in `test_migrations.py`. | **PASS** |
+Local CI checks pass on the audited working tree. Human remote verification requires a coherent commit candidate that includes required working-tree sources, migrations and tests. The initial checkout included unrelated documentation changes and private evidence. The first supervisor diff covered audit-touched paths. The follow-up bundle includes the working-tree implementation and migration dependencies for context. Both omit unrelated documentation changes, environment files, raw evidence archives and data.
 
----
+Hold Stage 0.5 until the independent review and human remote CI verification are available. Application-wide strict validation and universal idempotency are refuted as broad claims. The audit records the narrower verified contracts.
 
-## 4. Worker & Outbox Operational Audit (WK-01 through WK-04)
+## Supervisor Review (9router / cx/gpt-6-astra)
 
-### 4.1 Findings & Hardening
+**VERIFIED** first response at the authorized loopback endpoint returned HTTP 200 and verdict **BLOCK**. The reviewer flagged missing source dependencies and candidate provenance, reliance on declared authorization markers, worker lock contention and retry consumption, inherited router/catalog additions in the HEAD-relative diff, missing scanner coverage and pending remote CI with a different local Node major.
 
-| Check ID | Requirement | Initial Baseline Defect | Remediated Implementation | Evidence |
-|---|---|---|---|---|
-| `WK-01` | Bounded Retries | Unbounded execution risks infinite loop. | Added `MAX_RETRIES = 5`. SQL selection filters `WHERE retry_count < 5`. | `test_outbox_worker_dead_letters_after_max_retries` |
-| `WK-02` | Transaction Isolation | Batch-level errors roll back entire worker batch. | Each event dispatch runs in an isolated transaction savepoint (`with conn.transaction():`). | `test_outbox_worker_increments_retry_on_failure` |
-| `WK-03` | Dead-Letter Handling | Poison pills crash the worker process. | Events exceeding `MAX_RETRIES` log `CRITICAL` dead-letter notification and increment counter without crashing. | `test_outbox_worker_dead_letters_after_max_retries` |
-| `WK-04` | Crash Loop Resilience | Uncaught exceptions terminate the worker daemon. | Polling loop wrapped in general exception handler with structured logging and exponential pause. | Code review of `run_worker()` in `outbox_worker.py` |
+- **VERIFIED / fixed** PostgreSQL `LockNotAvailable` deferred the job through the same path as a transport failure before this follow-up. `services/api/app/workers/outbox_worker.py:178` now schedules the next attempt without consuming a delivery attempt. The separate PostgreSQL transactions in `services/api/tests/test_outbox_worker.py:261` exercise the retention-style student/outbox lock order at retry count 4. The test checks the worker returns, lets the competing transaction acquire the outbox row, and processes the deferred row after rollback without increasing its delivery retry count. Educational validation, including the existing plan/catalog locks, uses a one-second per-lock timeout inside its savepoint (`services/api/app/workers/outbox_worker.py:118`).
+- **VERIFIED** the registry check proves a declared enforcing dependency is attached. Student, owner/admin and webhook authorization behavior is separately supported by the existing negative tests. The nested router regression now checks both missing and valid synthetic credentials (`services/api/tests/test_authz_routes.py:18`). The fixture dependency is test-only.
+- **VERIFIED** the owner repository takes an exclusive catalog advisory lock before row locks (`services/api/app/modules/content/management.py:177`). Agent delivery takes the shared form before resource row locks (`services/api/app/modules/content/repository.py:250`). The remaining timing of competing owner mutations under real delivery load is **UNTESTED**.
+- **VERIFIED** the extra router registrations and trusted-catalog delivery logic were inherited from the initial working tree. The audit adds the startup coverage check, worker retry/lock/log corrections, CI pattern-gate correction, development DB binding and regressions. No feature work or unrelated cleanup was undertaken.
+- **VERIFIED** post-fix API suite returned `379 passed, 2 warnings in 17.72s`. R01 records the migration, lint, typecheck and policy results. **UNTESTED** full history/dependency scanners and remote CI. The worktree still requires a human-selected reviewable commit candidate.
 
-### 4.2 Outbox Concurrency & Behavioral Investigation
+**VERIFIED** follow-up response returned HTTP 200 and verdict **BLOCK**. The supervisor found evidence for the contention deferral, savepoint, log and CI changes. It identified no additional confirmed CRITICAL/HIGH defect. Remaining flags were candidate provenance and inherited feature changes, Node 20 remote CI, scanner coverage, absent unchanged privileged-auth source in the diff, and limits of the concurrency fixtures.
 
-- **Query Semantics:**
-  ```sql
-  SELECT id, student_id, event_type, aggregate_type, aggregate_id, payload, retry_count
-  FROM outbox_events
-  WHERE processed_at IS NULL AND retry_count < 5
-  ORDER BY occurred_at ASC
-  LIMIT %s
-  FOR UPDATE SKIP LOCKED;
-  ```
-- **Concurrency Guarantee:** `FOR UPDATE SKIP LOCKED` allows multiple outbox worker processes or container replicas to pull non-overlapping batches concurrently without deadlock or duplicate processing.
-- **Delivery Guarantee:** At-least-once delivery to external message queues. State transition to `processed_at = NOW()` occurs within the same database transaction boundary as event dispatch.
-
----
-
-## 5. Acceptance Test Scenario Book Audit (TASK-03)
-
-- **Coverage:** 30 complete scenarios authored across all 5 educational stages in `docs/test-scenarios/`:
-  - `primary_low` (3 success, 3 failure): Phonics pacing, co-viewing, capacity limits (30m), guardian consent (D-04).
-  - `primary_high` (3 success, 3 failure): Homework scheduling, self-assessment, licensing validation (D-02), study ceiling (60m).
-  - `lower_secondary` (3 success, 3 failure): Academic branch guidance, science mastery, DAG cycle detection, privacy separation.
-  - `upper_secondary` (3 success, 3 failure): Track scheduling (experimental/math), review timetables, ceiling limits (480m), prompt injection resistance.
-  - `konkur` (3 success, 3 failure): 12-month competitive sprint, manual score intake (D-03), physiological ceiling (600m), append-only revisions (ADR-0005).
-- **Compliance with Architectural Decision Records:**
-  - ADR-0003: Centralized backend authorization enforced.
-  - ADR-0004: Educational logic deterministic and isolated from LLM prompt text.
-  - ADR-0005: Audit trails and revision histories strictly append-only.
-  - ADR-0006: AI provider pluggable with fallback planner.
-  - ADR-0008: Explicit denormalized `student_id` present on all student data entities.
-  - D-04: Minor student guardian consent enforced for students under age threshold.
-
----
-
-## 6. Remote Continuous Integration Audit (Gate R01)
-
-- **Workflow Run ID:** `41260318410`
-- **Workflow Run URL:** https://github.com/Sarasa-AI/kunkor/actions/runs/41260318410
-- **Verified Commit:** `a733c236ad6beeb3dffca1e2e2ec7c2b5ec58451`
-- **Remote Jobs Executed & Verified Green:**
-  1. `API (Lint, Typecheck, Test, Authz)`: 35s — Passed (Postgres 16 container, schema migration, 9 tests, Ruff, Mypy, import boundaries, authz matrix).
-  2. `Web (Lint, Typecheck)`: 51s — Passed (Next.js 15, ESLint, TypeScript).
-  3. `Secret & Dependency Scan`: 5s — Passed (0 secret leaks detected).
-- **Deliverable:** `R01_CI_VERIFICATION_REPORT.md` marked **VERIFIED**.
-
----
-
-## 7. Stage 0 Exit Gate Decision
-
-| Exit Criteria | Verification Status | Notes |
-|---|---|---|
-| TASK-00: Repository Skeleton & CI | **PASSED** | CI workflow green on GitHub Actions with PostgreSQL 16 container. |
-| TASK-01: Decisions & ADRs Baseline | **PASSED** | D-01..D-09 recorded in `docs/decisions.md`; ADR-0001..0008 approved. |
-| TASK-02: Database & Core Foundation | **PASSED** | 5 tables, append-only trigger, outbox worker hardened with 5 retries. |
-| TASK-03: Test Scenario Book | **PASSED** | 30 scenarios documented in `docs/test-scenarios/` matching 5 cohorts. |
-| R01: PostgreSQL-Backed CI Gate | **PASSED** | Run `41260318410` confirmed green on `Sarasa-AI/kunkor`. |
-| Security Remediation (SEC-01..07) | **PASSED** | CORS, default passwords, Next 15 CVEs, authz checker remediated & tested. |
-| Stage 0.5 Isolation Compliance | **PASSED** | Prototypes isolated and excluded from Stage 0 commits. |
-
-### Final Recommendation
-**STAGE 0 IS OFFICIALLY COMPLETE AND SIGNED OFF.**  
-The repository is authorized to proceed to Stage 0.5 (AI Contract & Deterministic Validator incorporation) and Stage 1 (User Identity, Onboarding, and Student Profile).
+The privileged dependency was inspected locally at `services/api/app/modules/operations/auth.py:11`. It fails closed on missing configuration, compares supplied credentials with a configured admin key, and returns 403 on invalid credentials. Actual denial evidence includes `services/api/tests/test_phase1_identity_isolation.py:198` and `services/api/tests/test_operations_recovery.py:12`. The attached-dependency scanner provides structural coverage only. The worker contention fixture ends in safe suppression of a missing plan. Successful delivery under simultaneous plan or catalog mutation remains **UNTESTED**. The gate stays **BLOCK**.

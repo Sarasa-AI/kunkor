@@ -23,6 +23,8 @@ from app.modules.consultation.repository import ConsultationRepository
 from app.modules.consultation.service import ConsultationService
 from app.workers.outbox_worker import process_pending_outbox_events
 
+pytestmark = pytest.mark.usefixtures("synthetic_planner_catalog")
+
 client = TestClient(app)
 
 
@@ -617,7 +619,7 @@ async def test_completed_curriculum_stops_without_repeating_completed_units():
             result = await service.handle_progress_and_revision(
                 conn, student_id, units, [], 180, telegram_chat_id=chat_id
             )
-            if result["status"] == "curriculum_completed":
+            if result["status"] == "available_content_completed":
                 break
         else:
             pytest.fail("Curriculum failed to finish within catalog bound")
@@ -677,7 +679,7 @@ def test_unsupported_grade_or_small_capacity_preserves_intake_without_plan(answe
         )
         assert response.status_code == 200
     result = response.json()
-    assert result["status"] == "resources_unavailable"
+    assert result["status"] == "awaiting_content"
     with psycopg.connect(get_connection_string(test=True)) as conn:
         student_id = uuid.UUID(result["student_id"])
         assert ConsultationRepository.get_active_study_plan(conn, student_id) is None

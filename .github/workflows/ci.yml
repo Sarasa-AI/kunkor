@@ -89,6 +89,18 @@ jobs:
         run: |
           cd apps/web && npm run typecheck
 
+      - name: Test health proxy contract
+        run: |
+          cd apps/web && npm run test:healthz
+
+      - name: Test owner content proxy authorization and empty catalog
+        run: |
+          cd apps/web && npm run test:content
+
+      - name: Build Web and verify production health proxy
+        run: |
+          cd apps/web && npm run build && npm run test:healthz:runtime
+
   secret-scan:
     name: Secret & Dependency Scan
     runs-on: ubuntu-latest
@@ -97,5 +109,9 @@ jobs:
 
       - name: Scan for committed secrets / patterns
         run: |
-          ! grep -rn "PRIVATE KEY" --exclude-dir={.git,node_modules,.github} --exclude="*.md" .
-          ! grep -rn "kunkor_prod_secret" --exclude-dir={.git,node_modules,.github} --exclude="*.md" .
+          if git grep --quiet -e "PRIVATE KEY" -e "kunkor_prod_secret" -- ':!*.md' ':!.github'; then
+            echo "A blocked secret pattern was found in tracked source or configuration."
+            exit 1
+          else
+            test "$?" -eq 1
+          fi

@@ -1,0 +1,64 @@
+.page {
+  --ink: #171717;
+  --muted: #475569;
+  --surface: #ffffff;
+  --border: #d1d5db;
+  --accent: #854d0e;
+  --danger: #b91c1c;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+.page * { box-sizing: border-box; }
+.page h1, .page h2, .page h3, .page p { margin: 0; }
+.page h1 { font-size: clamp(26px, 4vw, 36px); line-height: 1.25; }
+.page h2 { font-size: 21px; }
+.page h3 { font-size: 17px; }
+.page a { color: var(--accent); text-underline-offset: 3px; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin: 16px 0 28px; }
+.eyebrow { color: var(--accent); font-size: 13px; font-weight: 700; letter-spacing: .1em; margin-bottom: 8px !important; }
+.description { color: var(--muted); margin-top: 12px !important; max-width: 680px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+.login { max-width: 560px; margin: 40px auto; }
+.layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 24px; align-items: start; }
+.stack { display: grid; gap: 16px; }
+.toolbar { display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
+.button { font: inherit; min-height: 44px; padding: 9px 16px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--ink); cursor: pointer; transition: background-color 160ms, border-color 160ms; }
+.button:hover { background: #f1f5f9; border-color: #64748b; }
+.button:disabled { opacity: .55; cursor: not-allowed; }
+.primary { color: #ffffff; background: var(--ink); border-color: var(--ink); }
+.primary:hover { background: #404040; }
+.danger { color: var(--danger); border-color: #fca5a5; }
+.page :is(button, input, select, textarea, summary, a):focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.page :is(input, select, textarea) { width: 100%; min-height: 44px; border: 1px solid #94a3b8; border-radius: 6px; padding: 10px 12px; font: inherit; background: var(--surface); color: var(--ink); }
+.page textarea { min-height: 92px; resize: vertical; }
+.field { display: grid; gap: 6px; font-size: 15px; font-weight: 600; }
+.hint { color: var(--muted); font-size: 14px; font-weight: 400; }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.full { grid-column: 1 / -1; }
+.choice { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 15px; }
+.choice input { width: 20px; min-height: 20px; height: 20px; accent-color: var(--ink); }
+.choices { display: flex; gap: 20px; flex-wrap: wrap; }
+.details { padding-top: 16px; border-top: 1px solid var(--border); }
+.details summary { cursor: pointer; font-weight: 600; padding: 8px 0 16px; }
+.list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.item { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; width: 100%; text-align: left; }
+.itemText { min-width: 0; overflow-wrap: anywhere; }
+.item small { display: block; color: var(--muted); margin-top: 4px; }
+.selected { border-color: var(--accent); background: #fffbeb; }
+.status { padding: 3px 8px; border-radius: 5px; font-size: 12px; font-weight: 600; color: var(--muted); background: #f1f5f9; white-space: nowrap; }
+.published { color: #166534; background: #dcfce7; }
+.notice { padding: 14px 18px; border: 1px solid #86efac; background: #f0fdf4; color: #166534; border-radius: 8px; margin-bottom: 20px; }
+.error { border-color: #fca5a5; background: #fff1f2; color: var(--danger); }
+.empty { color: var(--muted); padding: 24px 0; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.review { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border); }
+.audit { margin: 12px 0 0; padding-left: 20px; font-size: 14px; color: var(--muted); }
+.audit li { padding-bottom: 10px; overflow-wrap: anywhere; }
+.unitList { margin-top: 24px; }
+.sectionTitle { margin: 0 0 12px !important; }
+@media (max-width: 850px) { .layout { grid-template-columns: 1fr; } .header { flex-direction: column; } }
+@media (max-width: 520px) { .page { padding: 24px 16px 48px; } .card { padding: 20px 16px; } .fields { grid-template-columns: 1fr; } .button { padding: 9px 12px; } }
+@media (prefers-reduced-motion: reduce) { .button { transition: none; } }

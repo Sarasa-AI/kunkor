@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:healthz": "node --test tests/healthz.test.cjs",
+    "test:healthz:runtime": "node --test tests/healthz-runtime.test.cjs",
+    "test:contexts": "node --test tests/docker-contexts.test.cjs",
+    "test:content": "node --test tests/content-proxy.test.cjs"
   },
   "dependencies": {
     "next": "^15.5.28",

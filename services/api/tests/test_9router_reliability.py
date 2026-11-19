@@ -12,7 +12,14 @@ from app.ai.provider import (
     NineRouterProvider,
     ProviderBudget,
 )
+from app.core.config import settings
 from app.schemas.planning import IntakeSlots
+
+
+@pytest.fixture(autouse=True)
+def synthetic_enabled_provider(monkeypatch):
+    monkeypatch.setattr(settings, "NINEROUTER_ENABLED", True)
+    monkeypatch.setattr(settings, "NINEROUTER_API_KEY", "synthetic-provider-key")
 
 
 @pytest.fixture
@@ -31,6 +38,7 @@ def sample_catalog():
     return [
         {
             "resource_id": "res_math_1",
+            "subject": "mathematics",
             "stage_code": "konkur",
             "status": "Published",
             "license_active": True,
@@ -38,6 +46,7 @@ def sample_catalog():
         },
         {
             "resource_id": "res_phys_1",
+            "subject": "physics",
             "stage_code": "konkur",
             "status": "Published",
             "license_active": True,
@@ -45,6 +54,7 @@ def sample_catalog():
         },
         {
             "resource_id": "res_bio_draft",
+            "subject": "biology",
             "stage_code": "konkur",
             "status": "Draft",
             "license_active": True,
@@ -287,8 +297,10 @@ async def test_prompt_contains_only_structured_context(sample_intake, sample_cat
     assert context["weak_subjects"] == ["biology"]
     assert "target_exam" not in context
     assert all("title" not in r for r in context["resources"])
-    assert context["completed_unit_ids"] == ["res_math_1"]
-    assert context["resources"][0]["resource_id"] == "res_math_1"
+    alias = context["resources"][0]["resource_id"]
+    assert alias != "res_math_1"
+    assert context["completed_unit_ids"] == [alias]
+    assert "res_math_1" not in json.dumps(context)
 
 
 @pytest.mark.parametrize(

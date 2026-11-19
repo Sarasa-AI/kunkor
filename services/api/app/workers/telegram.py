@@ -23,13 +23,22 @@ class DeliveryDisabled(Exception):
     pass
 
 
-def send_message(chat_id: int, text: str) -> int:
+class PermanentDeliveryError(RuntimeError):
+    pass
+
+
+def send_message(chat_id: int | None, text: str | None) -> int:
     if not settings.TELEGRAM_DELIVERY_ENABLED:
         raise DeliveryDisabled()
     if not settings.TELEGRAM_BOT_TOKEN:
         raise RuntimeError("Telegram token missing")
-    if not isinstance(chat_id, int) or chat_id <= 0 or not text or len(text) > 4096:
-        raise ValueError("Invalid Telegram message")
+    if (
+        type(chat_id) is not int
+        or chat_id <= 0
+        or not isinstance(text, str)
+        or not 0 < len(text) <= 4096
+    ):
+        raise PermanentDeliveryError("Invalid Telegram message")
     # Never log request URLs: Telegram embeds the secret token in the URL.
     try:
         response = httpx.post(
@@ -43,5 +52,9 @@ def send_message(chat_id: int, text: str) -> int:
         if data.get("ok") is not True or not isinstance(message_id, int):
             raise ValueError("Telegram did not accept message")
         return message_id
-    except Exception:
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in {400, 403}:
+            raise PermanentDeliveryError("Telegram rejected the message or recipient") from None
+        raise RuntimeError("Telegram delivery failed; acceptance unconfirmed") from None
+    except (httpx.RequestError, ValueError, AttributeError):
         raise RuntimeError("Telegram delivery failed; acceptance unconfirmed") from None

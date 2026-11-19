@@ -4,10 +4,6 @@ import uuid
 
 import pytest
 
-from app.engines.catalog import (
-    get_default_catalog,
-    get_resources_for_stage,
-)
 from app.engines.validator import (
     CyclicDependencyError,
     DeterministicValidator,
@@ -18,6 +14,10 @@ from app.engines.validator import (
     StudyTimeLimitExceededError,
 )
 from app.schemas.planning import IntakeSlots, StudyPlan
+from tests.synthetic_catalog import (
+    get_default_catalog,
+    get_resources_for_stage,
+)
 
 
 @pytest.fixture
@@ -36,8 +36,8 @@ def konkur_intake():
     )
 
 
-def test_resource_whitelist_catalog_contains_all_stages():
-    """Verify initial resource whitelist provides coverage across all educational stages."""
+def test_synthetic_test_catalog_exercises_all_legacy_stages():
+    """Synthetic fixtures exercise scheduler boundaries without populating the catalog."""
     catalog = get_default_catalog()
     assert len(catalog) >= 15
 

@@ -27,26 +27,11 @@ class ConsultationRepository:
         telegram_username: Optional[str] = None,
         first_name: Optional[str] = None,
     ) -> UUID:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """
-                INSERT INTO students (
-                    telegram_chat_id, telegram_user_id, telegram_username, first_name
-                )
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (telegram_chat_id) DO UPDATE
-                SET updated_at = NOW(),
-                    telegram_username = COALESCE(
-                        EXCLUDED.telegram_username, students.telegram_username
-                    ),
-                    first_name = COALESCE(EXCLUDED.first_name, students.first_name)
-                RETURNING id;
-                """,
-                (telegram_chat_id, telegram_user_id, telegram_username, first_name),
-            )
-            row = cur.fetchone()
-            assert row is not None
-            return UUID(str(row["id"]))
+        from app.modules.identity.service import IdentityService
+
+        return IdentityService().get_or_create_student(
+            conn, telegram_chat_id, telegram_user_id, telegram_username, first_name
+        )
 
     @staticmethod
     def get_active_intake_session(
@@ -106,6 +91,8 @@ class ConsultationRepository:
         current_step: str,
         slots: dict[str, Any],
         is_completed: bool = False,
+        *,
+        student_id: UUID,
     ) -> None:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
@@ -115,9 +102,9 @@ class ConsultationRepository:
                     slots = %s::jsonb,
                     is_completed = %s,
                     updated_at = NOW()
-                WHERE id = %s;
+                WHERE id = %s AND student_id = %s;
                 """,
-                (current_step, json.dumps(slots), is_completed, session_id),
+                (current_step, json.dumps(slots), is_completed, session_id, student_id),
             )
 
     @staticmethod
@@ -155,17 +142,21 @@ class ConsultationRepository:
         ConsultationRepository.lock_student(conn, student_id)
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                "UPDATE study_plans SET status = 'superseded' "
-                "WHERE student_id = %s AND status = 'active'",
-                (student_id,),
+                "WITH changed AS (UPDATE study_plans SET status = 'superseded' "
+                "WHERE student_id = %s AND status = 'active' RETURNING id, revision_no) "
+                "INSERT INTO audit_events "
+                "(student_id, action, resource_type, resource_id, metadata) "
+                "SELECT %s, 'study_plan.superseded', 'study_plan', id::text, "
+                "jsonb_build_object('revision_no', revision_no) FROM changed",
+                (student_id, student_id),
             )
             cur.execute(
                 """
                 INSERT INTO study_plans (
                     id, student_id, revision_no, stage_code, status,
-                    engine_version, rule_set_version, raw_proposal, intake_slots
+                    engine_version, rule_set_version, raw_proposal, intake_slots, created_at
                 )
-                VALUES (%s, %s, %s, %s, 'active', %s, %s, %s::jsonb, %s::jsonb)
+                VALUES (%s, %s, %s, %s, 'active', %s, %s, %s::jsonb, %s::jsonb, clock_timestamp())
                 RETURNING id;
                 """,
                 (
@@ -198,6 +189,22 @@ class ConsultationRepository:
                         json.dumps(item.get("prerequisites", [])),
                     ),
                 )
+            cur.execute(
+                "INSERT INTO audit_events "
+                "(student_id, action, resource_type, resource_id, metadata) "
+                "VALUES (%s, 'study_plan.activated', 'study_plan', %s, %s::jsonb)",
+                (
+                    student_id,
+                    str(plan_id),
+                    json.dumps(
+                        {
+                            "revision_no": revision_no,
+                            "engine_version": engine_version,
+                            "rule_set_version": rule_set_version,
+                        }
+                    ),
+                ),
+            )
         return plan_id
 
     @staticmethod
@@ -278,10 +285,10 @@ class ConsultationRepository:
                 SELECT id, plan_id, student_id, item_order, resource_version_id,
                        stage_code, duration_minutes, prerequisites
                 FROM study_plan_items
-                WHERE plan_id = %s
+                WHERE plan_id = %s AND student_id = %s
                 ORDER BY item_order ASC;
                 """,
-                (plan["id"],),
+                (plan["id"], student_id),
             )
             items = [dict(r) for r in cur.fetchall()]
             for it in items:
@@ -297,6 +304,21 @@ class ConsultationRepository:
             plan["max_session_minutes"] = maximum
             plan["sessions"] = split_study_sessions(items, maximum)
             return plan
+
+    @staticmethod
+    def get_study_plan_by_id(
+        conn: psycopg.Connection[Any], student_id: UUID, plan_id: UUID
+    ) -> Optional[dict[str, Any]]:
+        """Read an owner-scoped saved plan for replay trust checks."""
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT p.*, COALESCE((SELECT jsonb_agg(to_jsonb(i) ORDER BY i.item_order) "
+                "FROM study_plan_items i WHERE i.plan_id = p.id AND i.student_id = %s), "
+                "'[]'::jsonb) AS items FROM study_plans p WHERE p.id = %s AND p.student_id = %s",
+                (student_id, plan_id, student_id),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
 
     @staticmethod
     def record_daily_progress(
@@ -334,7 +356,18 @@ class ConsultationRepository:
             )
             row = cur.fetchone()
             assert row is not None
-            return UUID(str(row["id"]))
+            progress_id = UUID(str(row["id"]))
+            cur.execute(
+                "INSERT INTO audit_events "
+                "(student_id, action, resource_type, resource_id, metadata) "
+                "VALUES (%s, 'progress.recorded', 'daily_progress_log', %s, %s::jsonb)",
+                (
+                    student_id,
+                    str(progress_id),
+                    json.dumps({"plan_id": str(plan_id), "revision_no": revision_no}),
+                ),
+            )
+            return progress_id
 
     @staticmethod
     def get_completed_unit_ids_for_student(
@@ -363,15 +396,22 @@ class ConsultationRepository:
     def supersede_plan(
         conn: psycopg.Connection[Any],
         plan_id: UUID,
+        *,
+        student_id: UUID,
     ) -> None:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                UPDATE study_plans
+                WITH changed AS (UPDATE study_plans
                 SET status = 'superseded'
-                WHERE id = %s;
+                WHERE id = %s AND student_id = %s AND status = 'active'
+                RETURNING id, revision_no)
+                INSERT INTO audit_events
+                    (student_id, action, resource_type, resource_id, metadata)
+                SELECT %s, 'study_plan.superseded', 'study_plan', id::text,
+                    jsonb_build_object('revision_no', revision_no) FROM changed;
                 """,
-                (plan_id,),
+                (plan_id, student_id, student_id),
             )
 
     @staticmethod

@@ -17,18 +17,20 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
 from app.ai.pii import sanitize_intake_for_ai
-from app.ai.usage import reserve_daily_attempt
+from app.core.ai_usage import reserve_daily_attempt
 from app.core.config import settings
 from app.engines.validator import TRACK_SUBJECT_ALLOWLIST
 from app.schemas.planning import STAGE_CAPACITY_LIMITS, IntakeSlots
 
 logger = logging.getLogger("kunkor.ai")
 telemetry_logger = logging.getLogger("kunkor.telemetry.ai")
+PROVIDER_ADAPTER_VERSION = "phase1-1"
+PROMPT_VERSION = "study-plan-structured-1"
 
 
 @dataclass
@@ -78,10 +80,12 @@ class DeterministicRuleFallbackPlanner:
             for r in available_resources
             if r.get("stage_code") == intake.stage_code
             and r.get("grade", intake.grade) == intake.grade
-            and r.get("subject", "mathematics") in TRACK_SUBJECT_ALLOWLIST[intake.track]
+            and r.get("subject") in TRACK_SUBJECT_ALLOWLIST[intake.track]
             and r.get("status") == "Published"
-            and r.get("license_active", True)
+            and r.get("license_active", False)
             and not r.get("license_expired", False)
+            and type(r.get("duration_minutes")) is int
+            and 0 < r["duration_minutes"] <= 600
         ]
 
         # Allocate units within daily capacity and stage ceiling
@@ -92,25 +96,35 @@ class DeterministicRuleFallbackPlanner:
         )
         scheduled_so_far: set[str] = set(completed_unit_ids or ())
 
-        for res in matching:
-            duration = res.get("duration_minutes", 20)
-            prereqs = res.get("prerequisites", [])
-            if not all(p in scheduled_so_far for p in prereqs):
-                continue
-            if duration <= remaining_budget:
-                allocated_items.append(
-                    {
-                        "item_id": f"item-{res['resource_id']}",
-                        "resource_version_id": res["resource_id"],
-                        "stage_code": intake.stage_code,
-                        "duration_minutes": duration,
-                        "prerequisites": prereqs,
-                    }
-                )
-                scheduled_so_far.add(res["resource_id"])
-                remaining_budget -= duration
-            if remaining_budget <= 0:
+        pending = matching
+        while pending and remaining_budget > 0:
+            deferred = []
+            scheduled_before = len(allocated_items)
+            for res in pending:
+                if res["resource_id"] in scheduled_so_far:
+                    continue
+                duration = res["duration_minutes"]
+                prereqs = res.get("prerequisites", [])
+                if not all(p in scheduled_so_far for p in prereqs):
+                    deferred.append(res)
+                    continue
+                if duration <= remaining_budget:
+                    allocated_items.append(
+                        {
+                            "item_id": f"item-{res['resource_id']}",
+                            "resource_version_id": res["resource_id"],
+                            "stage_code": intake.stage_code,
+                            "duration_minutes": duration,
+                            "prerequisites": prereqs,
+                        }
+                    )
+                    scheduled_so_far.add(res["resource_id"])
+                    remaining_budget -= duration
+                if remaining_budget <= 0:
+                    break
+            if len(allocated_items) == scheduled_before:
                 break
+            pending = deferred
 
         return {
             "source": "deterministic_fallback_planner",
@@ -138,7 +152,7 @@ class NineRouterProvider(AiProvider):
         usage_reserver: Optional[Callable[[UUID | None], bool]] = None,
     ):
         self.api_base_url = (api_base_url or settings.NINEROUTER_API_BASE).rstrip("/")
-        self._api_key = api_key or settings.NINEROUTER_API_KEY or "test-key"
+        self._api_key = api_key if api_key is not None else settings.NINEROUTER_API_KEY
         self.model = model or settings.NINEROUTER_MODEL
         timeout_sec = (
             timeout_seconds if timeout_seconds is not None else settings.NINEROUTER_TIMEOUT_SECONDS
@@ -170,20 +184,28 @@ class NineRouterProvider(AiProvider):
         tokens_prompt: int = 0,
         tokens_completion: int = 0,
         cost_usd: float = 0.0,
+        *,
+        run_id: str,
     ) -> None:
         """Log structured telemetry without PII or prompt text."""
+        metadata = {
+            "run_id": run_id,
+            "provider": "9router",
+            "provider_adapter_version": PROVIDER_ADAPTER_VERSION,
+            "prompt_version": PROMPT_VERSION,
+            "model": self.model,
+            "duration_ms": round(duration_ms, 2),
+            "status_code": status_code,
+            "attempt": attempt,
+            "fallback_used": fallback_used,
+            "tokens_prompt": tokens_prompt,
+            "tokens_completion": tokens_completion,
+            "estimated_cost_usd": cost_usd,
+        }
         telemetry_logger.info(
-            "ai_request_telemetry",
-            extra={
-                "model": self.model,
-                "duration_ms": round(duration_ms, 2),
-                "status_code": status_code,
-                "attempt": attempt,
-                "fallback_used": fallback_used,
-                "tokens_prompt": tokens_prompt,
-                "tokens_completion": tokens_completion,
-                "estimated_cost_usd": cost_usd,
-            },
+            "ai_request_telemetry %s",
+            json.dumps(metadata, sort_keys=True),
+            extra=metadata,
         )
 
     async def propose_study_plan(
@@ -192,43 +214,84 @@ class NineRouterProvider(AiProvider):
         available_resources: list[dict[str, Any]],
         completed_unit_ids: Optional[set[str]] = None,
     ) -> dict[str, Any]:
-        if self._client is None and not settings.NINEROUTER_ENABLED:
+        run_id = str(uuid4())
+        # ponytail: bounded structured metadata; add fields through this boundary.
+        available_resources = [
+            r
+            for r in available_resources[:100]
+            if isinstance(r, dict)
+            and isinstance(r.get("resource_id"), str)
+            and 0 < len(r["resource_id"]) <= 256
+            and isinstance(r.get("subject"), str)
+            and isinstance(r.get("stage_code"), str)
+            and isinstance(r.get("grade", intake.grade), str)
+            and type(r.get("duration_minutes")) is int
+            and 0 < r["duration_minutes"] <= 600
+            and isinstance(r.get("prerequisites", []), list)
+            and len(r.get("prerequisites", [])) <= 100
+            and all(isinstance(p, str) and 0 < len(p) <= 256 for p in r.get("prerequisites", []))
+        ]
+        completed_unit_ids = {
+            value
+            for value in (completed_unit_ids or ())
+            if isinstance(value, str) and 0 < len(value) <= 256
+        }
+        if not available_resources:
+            return {
+                "status": "awaiting_content",
+                "source": "trusted_catalog",
+                "items": [],
+                "citations": [],
+            }
+        # Configuration controls all transports; dependency injection cannot
+        # bypass disablement or explicit provider credentials.
+        if not settings.NINEROUTER_ENABLED:
+            self._record_telemetry(0.0, 0, 0, True, run_id=run_id)
+            return DeterministicRuleFallbackPlanner.generate_fallback_plan(
+                intake, available_resources, completed_unit_ids=completed_unit_ids
+            )
+        if not self._api_key.strip() or self._api_key == "kunkor_local_key":
+            logger.warning("AI provider credentials are not configured.")
+            self._record_telemetry(0.0, 401, 0, True, run_id=run_id)
             return DeterministicRuleFallbackPlanner.generate_fallback_plan(
                 intake, available_resources, completed_unit_ids=completed_unit_ids
             )
         # 1. Budget Guard
         if not self.budget.has_budget():
             logger.warning("9router budget limit reached (%s USD).", self.budget.budget_limit_usd)
-            self._record_telemetry(0.0, 429, 0, True)
+            self._record_telemetry(0.0, 429, 0, True, run_id=run_id)
             return DeterministicRuleFallbackPlanner.generate_fallback_plan(
                 intake, available_resources, completed_unit_ids=completed_unit_ids
             )
 
         # 2. Sanitize context (PII Masking per D-11)
         sanitized = sanitize_intake_for_ai(intake)
+        aliases: dict[str, str] = {}
+
+        def opaque(identifier: str) -> str:
+            if identifier not in aliases:
+                aliases[identifier] = f"unit-{len(aliases)}"
+            return aliases[identifier]
+
         # Only structured educational metadata; no titles or arbitrary free text.
         sanitized["resources"] = [
             {
-                key: r[key]
-                for key in (
-                    "resource_id",
-                    "stage_code",
-                    "grade",
-                    "subject",
-                    "duration_minutes",
-                    "prerequisites",
-                )
-                if key in r
+                "resource_id": opaque(r["resource_id"]),
+                "stage_code": intake.stage_code,
+                "grade": intake.grade,
+                "subject": r.get("subject", "mathematics"),
+                "duration_minutes": r["duration_minutes"],
+                "prerequisites": [opaque(p) for p in r.get("prerequisites", [])],
             }
             for r in available_resources
             if r.get("stage_code") == intake.stage_code
             and r.get("grade", intake.grade) == intake.grade
-            and r.get("subject", "mathematics") in TRACK_SUBJECT_ALLOWLIST[intake.track]
+            and r.get("subject") in TRACK_SUBJECT_ALLOWLIST[intake.track]
             and r.get("status") == "Published"
             and r.get("license_active", False)
             and not r.get("license_expired", False)
         ][:100]
-        sanitized["completed_unit_ids"] = sorted(completed_unit_ids or ())[:1000]
+        sanitized["completed_unit_ids"] = [opaque(p) for p in sorted(completed_unit_ids)[:1000]]
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -310,6 +373,7 @@ class NineRouterProvider(AiProvider):
                         tokens_prompt=p_tokens,
                         tokens_completion=c_tokens,
                         cost_usd=est_cost,
+                        run_id=run_id,
                     )
 
                     content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
@@ -320,6 +384,29 @@ class NineRouterProvider(AiProvider):
                     else:
                         proposal = {"raw": parsed}
                     proposal["source"] = "9router"
+                    proposal.update(
+                        {
+                            "run_id": run_id,
+                            "provider": "9router",
+                            "provider_adapter_version": PROVIDER_ADAPTER_VERSION,
+                            "prompt_version": PROMPT_VERSION,
+                            "model": self.model,
+                        }
+                    )
+                    original_ids = {alias: identifier for identifier, alias in aliases.items()}
+                    for item in proposal.get("items", []):
+                        if isinstance(item, dict):
+                            identifier = item.get("resource_version_id")
+                            if isinstance(identifier, str):
+                                item["resource_version_id"] = original_ids.get(
+                                    identifier, identifier
+                                )
+                            prerequisites = item.get("prerequisites")
+                            if isinstance(prerequisites, list):
+                                item["prerequisites"] = [
+                                    original_ids.get(p, p) if isinstance(p, str) else p
+                                    for p in prerequisites
+                                ]
                     return proposal
 
                 # Handle HTTP 429 Rate Limit
@@ -381,7 +468,7 @@ class NineRouterProvider(AiProvider):
                 break
 
         # Fallback path if all retries exhausted or non-retryable error
-        self._record_telemetry(0.0, last_error_code, attempts, True)
+        self._record_telemetry(0.0, last_error_code, attempts, True, run_id=run_id)
         return DeterministicRuleFallbackPlanner.generate_fallback_plan(
             intake, available_resources, completed_unit_ids=completed_unit_ids
         )

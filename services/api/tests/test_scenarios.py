@@ -76,7 +76,7 @@ def test_scen_pl_s03_parent_capacity_revision():
 
 
 @pytest.mark.parametrize("consent", [None, False])
-def test_scen_pl_f01_deferred_guardian_policy_preserves_educational_checks(consent):
+def test_scen_pl_f01_boolean_profile_assertion_preserves_educational_checks(consent):
     data = dict(
         stage_code="primary_low",
         grade="G02",

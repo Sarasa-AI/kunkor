@@ -2,9 +2,12 @@ import json
 import os
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.deployment import normalize_environment, validate_production_database_url
 
 
 class Settings(BaseSettings):
@@ -12,7 +15,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     TEST_DATABASE_URL: str = ""
     APP_PORT: int = 8000
-    CORS_ALLOWED_ORIGINS: list[str] = []
+    CORS_ALLOWED_ORIGINS: list[str] = [
+        "http://localhost:3002",
+        "http://127.0.0.1:3002",
+        "http://localhost:3000",
+    ]
 
     # AI & 9router configuration (ADR-0006, D-11)
     NINEROUTER_ENABLED: bool = False
@@ -48,7 +55,13 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
+
+    @field_validator("ENVIRONMENT")
+    @classmethod
+    def validate_environment_name(cls, value: str) -> str:
+        return normalize_environment(value)
 
     @field_validator("CORS_ALLOWED_ORIGINS", mode="before")
     @classmethod
@@ -73,12 +86,11 @@ class Settings(BaseSettings):
     def validate_environment_and_credentials(self) -> "Settings":
         env = self.ENVIRONMENT.lower()
         if env == "production":
-            if not self.DATABASE_URL:
-                raise ValueError("DATABASE_URL is required in production environment.")
-            if "kunkor_dev_password" in self.DATABASE_URL:
-                raise ValueError("Insecure default credentials prohibited in production.")
+            validate_production_database_url(self.DATABASE_URL)
             if not self.ADMIN_API_KEY.strip() or self.ADMIN_API_KEY == "kunkor_admin_secret_key":
                 raise ValueError("Explicit ADMIN_API_KEY is required in production.")
+            if "CORS_ALLOWED_ORIGINS" not in self.model_fields_set:
+                self.CORS_ALLOWED_ORIGINS = []
         if self.NINEROUTER_ENABLED and (
             not self.NINEROUTER_API_KEY.strip() or self.NINEROUTER_API_KEY == "kunkor_local_key"
         ):
@@ -98,13 +110,28 @@ class Settings(BaseSettings):
                     "TEST_DATABASE_URL",
                     "postgresql://kunkor:kunkor_dev_password@localhost:5435/kunkor_test",
                 )
-            if not self.CORS_ALLOWED_ORIGINS:
-                self.CORS_ALLOWED_ORIGINS = [
-                    "http://localhost:3000",
-                    "http://127.0.0.1:3000",
-                ]
 
         self.CORS_ALLOWED_ORIGINS = [o for o in self.CORS_ALLOWED_ORIGINS if o != "*"]
+        for origin in self.CORS_ALLOWED_ORIGINS:
+            try:
+                parsed = urlsplit(origin)
+                valid = (
+                    parsed.scheme in {"http", "https"}
+                    and bool(parsed.hostname)
+                    and parsed.username is None
+                    and parsed.password is None
+                    and not parsed.path
+                    and not parsed.query
+                    and not parsed.fragment
+                    and not any(char.isspace() for char in origin)
+                )
+                parsed.port  # Validate malformed/out-of-range ports.
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ValueError(
+                    "CORS origins must be HTTP(S) origins without credentials or paths."
+                )
         return self
 
 
