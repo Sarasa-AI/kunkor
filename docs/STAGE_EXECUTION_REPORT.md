@@ -15,3 +15,11 @@ Stage 0.5 follows the planning contract in `gate-report.md` at `84acb5fe`. Stage
 `pytest -q tests/test_phase1_production_controls.py tests/test_phase1_privacy_authority.py tests/test_phase1_audit_integrity.py tests/test_phase1_migration_safety.py` returned `59 passed in 1.96s` on PostgreSQL 16.15.
 
 **Astra PASS, cycle 1.** HTTP 200. No verified local failure. Live activation and human release checks remain open.
+
+## Stage 2 - Signed identity, profile, and owner catalog
+
+**VERIFIED.** Candidate `a69ccb1` includes signed Telegram identity and tenant-scoped profile/context reads and writes. The local test signer uses synthetic credentials without an external auth call. The composite plan/item and progress ownership constraints reject cross-student linkage. Empty startup, independent publication, active rights, archive isolation, and owner authorization use disposable PostgreSQL and synthetic data only.
+
+`pytest -q` across `test_phase1_identity_isolation.py`, `test_phase2_identity_security.py`, `test_content_catalog.py`, `test_content_owner.py`, `test_content_student_context.py`, `test_empty_catalog_startup.py`, and `test_web_consultation_endpoints.py` returned `99 passed, 2 warnings in 6.33s`. Stage 0's clean candidate also passed the eight web proxy contract tests.
+
+**Astra PASS, cycle 1.** HTTP 200. No verified local defect in signed identity, route policies, or ownership schema. Existing implementation accepted without a code change.
