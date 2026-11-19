@@ -23,3 +23,11 @@ Stage 0.5 follows the planning contract in `gate-report.md` at `84acb5fe`. Stage
 `pytest -q` across `test_phase1_identity_isolation.py`, `test_phase2_identity_security.py`, `test_content_catalog.py`, `test_content_owner.py`, `test_content_student_context.py`, `test_empty_catalog_startup.py`, and `test_web_consultation_endpoints.py` returned `99 passed, 2 warnings in 6.33s`. Stage 0's clean candidate also passed the eight web proxy contract tests.
 
 **Astra PASS, cycle 1.** HTTP 200. No verified local defect in signed identity, route policies, or ownership schema. Existing implementation accepted without a code change.
+
+## Stage 3 - Trusted catalog retrieval
+
+**VERIFIED.** Structured PostgreSQL retrieval passed the D-13 gate for incremental publication and trusted use. Missing coverage returns an explicit unavailable state. Unknown counts remain unknown. Revoking rights or archiving source content invalidates stale planning and delivery. No new retrieval capability was needed for this local gate.
+
+`pytest -q tests/test_content_catalog.py tests/test_content_delivery.py tests/test_content_owner.py tests/test_content_student_context.py tests/test_trusted_catalog_agents.py` returned `51 passed, 1 warning in 1.99s`. PostgreSQL state was real and disposable. Delivery used mock transport.
+
+**Astra PASS, cycle 1.** HTTP 200. No verified local blocker. Owner population and per-item rights approvals remain operational.
