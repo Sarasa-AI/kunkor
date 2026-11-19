@@ -145,6 +145,21 @@ def test_validator_enforces_daily_study_capacity():
         DeterministicValidator.validate_study_time_limits(plan, intake)
 
 
+def test_validator_enforces_catalog_prerequisites_without_duration_metadata():
+    intake = IntakeSlots(stage_code="konkur", grade="G12", daily_study_capacity_minutes=60)
+    item = StudyPlanItem(
+        item_id="topic", resource_version_id="topic", stage_code="konkur", duration_minutes=30,
+    )
+    plan = StudyPlan(student_id=uuid.uuid4(), items=[item])
+    catalog = {"topic": ResourceMeta("topic", "konkur", prerequisites=("foundation",))}
+    completed = {"foundation"}
+    with pytest.raises(PrerequisiteNotSatisfiedError, match="trusted metadata"):
+        DeterministicValidator.validate_study_plan(plan, intake, catalog, completed)
+    matching_item = item.model_copy(update={"prerequisites": ["foundation"]})
+    matching_plan = plan.model_copy(update={"items": [matching_item]})
+    DeterministicValidator.validate_study_plan(matching_plan, intake, catalog, completed)
+
+
 def test_validator_enforces_resource_licensing_and_stage():
     catalog = {
         "res_published": ResourceMeta(

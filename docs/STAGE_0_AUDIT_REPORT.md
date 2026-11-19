@@ -44,7 +44,7 @@ Two additional confirmed worker deficiencies were fixed within scope. The previo
 
 Local CI checks pass on the audited working tree. Human remote verification requires a coherent commit candidate that includes required working-tree sources, migrations and tests. The initial checkout included unrelated documentation changes and private evidence. The first supervisor diff covered audit-touched paths. The follow-up bundle includes the working-tree implementation and migration dependencies for context. Both omit unrelated documentation changes, environment files, raw evidence archives and data.
 
-Hold Stage 0.5 until the independent review and human remote CI verification are available. Application-wide strict validation and universal idempotency are refuted as broad claims. The audit records the narrower verified contracts.
+The initial review held Stage 0.5 pending independent review and remote CI. The owner subsequently approved local progression with the release deferrals in `HUMAN_ACTION_REQUIRED.md`. Application-wide strict validation and universal idempotency are refuted as broad claims. The audit records the narrower verified contracts.
 
 ## Supervisor Review (9router / cx/gpt-6-astra)
 
@@ -58,4 +58,6 @@ Hold Stage 0.5 until the independent review and human remote CI verification are
 
 **VERIFIED** follow-up response returned HTTP 200 and verdict **BLOCK**. The supervisor found evidence for the contention deferral, savepoint, log and CI changes. It identified no additional confirmed CRITICAL/HIGH defect. Remaining flags were candidate provenance and inherited feature changes, Node 20 remote CI, scanner coverage, absent unchanged privileged-auth source in the diff, and limits of the concurrency fixtures.
 
-The privileged dependency was inspected locally at `services/api/app/modules/operations/auth.py:11`. It fails closed on missing configuration, compares supplied credentials with a configured admin key, and returns 403 on invalid credentials. Actual denial evidence includes `services/api/tests/test_phase1_identity_isolation.py:198` and `services/api/tests/test_operations_recovery.py:12`. The attached-dependency scanner provides structural coverage only. The worker contention fixture ends in safe suppression of a missing plan. Successful delivery under simultaneous plan or catalog mutation remains **UNTESTED**. The gate stays **BLOCK**.
+The privileged dependency was inspected locally at `services/api/app/modules/operations/auth.py:11`. It fails closed on missing configuration, compares supplied credentials with a configured admin key, and returns 403 on invalid credentials. Actual denial evidence includes `services/api/tests/test_phase1_identity_isolation.py:198` and `services/api/tests/test_operations_recovery.py:12`. The attached-dependency scanner provides structural coverage only. The worker contention fixture ends in safe suppression of a missing plan. Successful delivery under simultaneous plan or catalog mutation remains **UNTESTED**.
+
+**VERIFIED** owner-approved local follow-up returned HTTP 200, **PASS**. The scoped local baseline is commit `b1712e3`. Release checks stay open.

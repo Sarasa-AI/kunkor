@@ -268,10 +268,7 @@ class DeterministicValidator:
                 raise TrackSubjectMismatchError("Resource subject does not match student track.")
             if meta.duration_minutes is not None and item.duration_minutes != meta.duration_minutes:
                 raise MalformedPlanError("Resource duration differs from trusted metadata.")
-            if (
-                set(item.prerequisites) != set(meta.prerequisites)
-                and meta.duration_minutes is not None
-            ):
+            if set(item.prerequisites) != set(meta.prerequisites):
                 raise PrerequisiteNotSatisfiedError(
                     "Resource prerequisites differ from trusted metadata."
                 )
