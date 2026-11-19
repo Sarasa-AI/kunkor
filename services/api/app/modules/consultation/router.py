@@ -303,7 +303,7 @@ async def initialize_web_intake(
             ConsultationRepository.finish_request(conn, student_id, request_key, result)
             conn.commit()
             return result
-        proposal = await service.ai_provider.propose_study_plan(intake, resources)
+        proposal = await service.planner.propose(intake, resources)
 
         try:
             validated_plan, proposal = await service.validate_or_repair(

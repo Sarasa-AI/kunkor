@@ -1,11 +1,13 @@
 """Empty/partial catalog agent acceptance without educational content fixtures."""
 
+import asyncio
 import uuid
 
 import httpx
 import pytest
 
-from app.ai.provider import DeterministicRuleFallbackPlanner, NineRouterProvider
+from app.ai.orchestration import PlanningOrchestrator
+from app.ai.provider import AiProvider, DeterministicRuleFallbackPlanner, NineRouterProvider
 from app.core.config import settings
 from app.engines import catalog
 from app.modules.consultation.service import ConsultationService
@@ -17,6 +19,60 @@ def test_runtime_catalog_has_no_bundled_content():
     assert catalog.DEFAULT_RESOURCE_CATALOG == {}
     assert catalog.get_default_catalog() == {}
     assert catalog.get_resources_for_stage("konkur") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("offered", "selected", "outcome"),
+    [
+        ("physics", "provider", "validated"),
+        ("biology", "priority", "validated"),
+        ("missing", "priority", "rejected"),
+        (None, "priority", "timeout"),
+    ],
+)
+async def test_orchestrator_only_selects_validated_candidates(
+    monkeypatch, offered, selected, outcome
+):
+    intake = IntakeSlots(
+        stage_code="konkur", grade="G12", track="experimental",
+        daily_study_capacity_minutes=30, weak_subjects=["physics"],
+    )
+    resources = [
+        {
+            "resource_id": subject, "subject": subject, "duration_minutes": 30,
+            "stage_code": "konkur", "grade": "G12", "status": "Published", "license_active": True,
+        }
+        for subject in ("biology", "physics")
+    ]
+    calls = []
+
+    class StubProvider(AiProvider):
+        async def propose_study_plan(self, student, offered_resources, completed_unit_ids=None):
+            calls.append(True)
+            student.weak_subjects.clear()
+            offered_resources.clear()
+            if offered is None:
+                await asyncio.sleep(1)
+            return {
+                "items": [{
+                    "item_id": "provider-item", "resource_version_id": offered,
+                    "duration_minutes": 30,
+                }],
+                "untrusted_extra": "omitted",
+            }
+
+    monkeypatch.setattr(settings, "NINEROUTER_TIMEOUT_SECONDS", 0.01)
+    planner = PlanningOrchestrator(StubProvider())
+    assert (await planner.propose(intake, []))["items"] == []
+    assert not calls
+    proposal = await planner.propose(intake, resources)
+    assert calls == [True]
+    assert len(resources) == 2 and intake.weak_subjects == ["physics"]
+    assert proposal["items"][0]["resource_version_id"] == "physics"
+    assert proposal["orchestration"]["selected"] == selected
+    assert proposal["orchestration"]["outcomes"]["provider"] == outcome
+    assert "untrusted_extra" not in proposal
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from uuid import UUID
 import psycopg
 from fastapi import HTTPException
 
+from app.ai.orchestration import PlanningOrchestrator
 from app.ai.provider import (
     AiProvider,
     DeterministicRuleFallbackPlanner,
@@ -93,6 +94,7 @@ class ConsultationService:
         repository: Optional[ConsultationRepository] = None,
     ):
         self.ai_provider = ai_provider or NineRouterProvider()
+        self.planner = PlanningOrchestrator(self.ai_provider)
         self.repo = repository or ConsultationRepository()
 
     def trusted_student_result(
@@ -909,7 +911,7 @@ class ConsultationService:
                 }
 
             # Generate plan proposal via Proposer (AI)
-            proposal = await self.ai_provider.propose_study_plan(intake, available_resources)
+            proposal = await self.planner.propose(intake, available_resources)
 
             # Authoritative Deterministic Validator Check
             next_rev = self.repo.get_latest_plan_revision(conn, student_id) + 1
@@ -1132,8 +1134,8 @@ class ConsultationService:
         )
 
         # 6. Propose revised plan (AI or deterministic fallback)
-        proposal = await self.ai_provider.propose_study_plan(
-            intake, prioritized_resources, completed_unit_ids=all_completed
+        proposal = await self.planner.propose(
+            intake, prioritized_resources, completed=all_completed, preferred=missed_set
         )
         validated_plan: StudyPlan
 
@@ -1240,18 +1242,13 @@ class ConsultationService:
         if not resources:
             raise TrustedContentUnavailable("No approved, published scheduling resources available")
         catalog = catalog_from_resources(resources)
-        # ponytail: two fresh proposals; add structured repair feedback with provider support.
-        for attempt in range(3):
-            try:
-                plan = DeterministicValidator.validate_and_parse_proposal(
-                    proposal, intake, catalog, student_id, revision_no, completed_unit_ids=completed
-                )
-                return plan, proposal
-            except (ValueError, DeterministicValidationError):
-                if attempt < 2:
-                    proposal = await self.ai_provider.propose_study_plan(
-                        intake, resources, completed_unit_ids=completed
-                    )
+        try:
+            return DeterministicValidator.validate_and_parse_proposal(
+                proposal, intake, catalog, student_id, revision_no, completed_unit_ids=completed
+            ), proposal
+        except (ValueError, DeterministicValidationError):
+            # The catalog is locked here. Repair locally instead of making another network call.
+            pass
         fallback = DeterministicRuleFallbackPlanner.generate_fallback_plan(
             intake, resources, completed_unit_ids=completed
         )
@@ -1259,6 +1256,15 @@ class ConsultationService:
             raise TrustedContentUnavailable(
                 "No trusted resources fit the supplied intake and daily capacity."
             )
-        return DeterministicValidator.validate_and_parse_proposal(
-            fallback, intake, catalog, student_id, revision_no, completed_unit_ids=completed
-        ), fallback
+        try:
+            plan = DeterministicValidator.validate_and_parse_proposal(
+                fallback, intake, catalog, student_id, revision_no, completed_unit_ids=completed
+            )
+        except (ValueError, DeterministicValidationError):
+            raise TrustedContentUnavailable("No valid plan fits the current catalog") from None
+        if "orchestration" in proposal:
+            fallback["orchestration"] = {
+                **proposal["orchestration"],
+                "activation": "fresh_catalog_fallback",
+            }
+        return plan, fallback

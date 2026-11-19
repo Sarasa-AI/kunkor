@@ -193,6 +193,15 @@ def test_web_intake_and_active_plan_lifecycle(test_student):
     assert data["status"] == "plan_generated"
     assert data["revision_no"] == 1
     assert data["student_id"] == str(test_student)
+    assert "raw_proposal" not in data["plan"]
+    with get_db_connection(test=True) as conn:
+        decision = conn.execute(
+            "SELECT raw_proposal->'orchestration' AS decision FROM study_plans "
+            "WHERE id = %s AND student_id = %s",
+            (data["plan_id"], test_student),
+        ).fetchone()["decision"]
+    assert decision["version"] == 1
+    assert decision["outcomes"][decision["selected"]] == "validated"
 
     # 3. Read active plan back
     res_plan = client.get("/api/v1/consultation/active-plan", headers=headers)

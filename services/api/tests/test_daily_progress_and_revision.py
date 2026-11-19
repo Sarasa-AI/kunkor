@@ -574,7 +574,7 @@ def test_invalid_intake_clarifies_twice_then_cancels():
 
 
 @pytest.mark.asyncio
-async def test_invalid_proposals_repair_at_most_twice_then_validate_fallback():
+async def test_invalid_proposals_repair_locally_without_provider_retry():
     from app.schemas.planning import IntakeSlots
 
     class InvalidProvider:
@@ -598,7 +598,7 @@ async def test_invalid_proposals_repair_at_most_twice_then_validate_fallback():
     plan, proposal = await service.validate_or_repair(
         {"items": []}, intake, get_resources_for_stage("konkur"), uuid.uuid4(), 1
     )
-    assert provider.calls == 2
+    assert provider.calls == 0
     assert plan.items
     assert proposal["source"] == "deterministic_fallback_planner"
 

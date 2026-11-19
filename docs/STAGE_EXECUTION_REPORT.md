@@ -31,3 +31,13 @@ Stage 0.5 follows the planning contract in `gate-report.md` at `84acb5fe`. Stage
 `pytest -q tests/test_content_catalog.py tests/test_content_delivery.py tests/test_content_owner.py tests/test_content_student_context.py tests/test_trusted_catalog_agents.py` returned `51 passed, 1 warning in 1.99s`. PostgreSQL state was real and disposable. Delivery used mock transport.
 
 **Astra PASS, cycle 1.** HTTP 200. No verified local blocker. Owner population and per-item rights approvals remain operational.
+
+## Stage 4 - Multi-agent planning infrastructure
+
+**VERIFIED.** Web and Telegram intake and progress revision use the planner in `services/api/app/ai/orchestration.py`. The provider adapter has an overall timeout and retains its attempt limits. The other strategy prioritizes missed units and weak subjects using local rules. Both candidates must pass the deterministic validator before selection. Ranking uses missed-unit coverage, weak-subject coverage, and scheduled time in that order. The adapter wins an exact tie. This local ranking remains subject to educational evaluation in a later stage.
+
+The orchestrator receives structured context and holds no domain-write capability. It skips the provider when there are no schedulable resources. The consultation service rechecks current catalog state under lock before persistence. A changed catalog triggers local repair without another provider call. The chosen plan stores a private decision trace. Frontend responses continue to omit that trace.
+
+**VERIFIED.** A clean staged index export against a fresh PostgreSQL 16.15 database returned `384 passed, 2 warnings in 15.87s`. All 11 migrations applied, rolled back, and reapplied. Ruff, Mypy (45 source files), import boundaries and the 47-route matrix passed. Frontend inputs match the clean Stage 0 candidate. Mock coverage includes a valid tie, a weaker provider proposal, an invalid resource, a timeout, and empty context. The authenticated intake integration test checks that the trace persists and stays private. An initial full run on the reused database failed a saved-plan replay assertion. The focused rerun and fresh full run both passed; the first failure's cause remains unverified.
+
+**Astra PASS, cycle 1.** HTTP 200. Reviewed bounded selection, fresh domain validation, private trace and regression coverage. No verified local defect. Live provider quality, durable multi-turn agent execution, and the broader seven-role workflow remain outside this infrastructure gate.
